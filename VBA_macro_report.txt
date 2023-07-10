@@ -1,0 +1,4615 @@
+Option Explicit
+Dim HasStarted As Boolean
+Dim YearNumber As Integer 'to indicate which year's data is being involved
+Dim SplitNumber As Byte 'the Split part number for a certain Year, like "5" in "orders_2001_5"
+Public Const SplitTotal As Byte = 5 ' every year is split into 5 parts
+Public Const DBFilePath As String = "here is the directory of your data folder1"
+Public Const AccessDBFilePath As String = "here is the directory of your data folder2"
+Public Const AccessDBFileName As String = "Reporting.accdb"
+
+Dim NumberOfRows As Long
+Dim DisplayFileInfo As String
+Dim TimeStamp As String
+Dim Stage As Byte 'to determine if to delete the incomplete excel file when error occurs
+
+Dim G_rs As ADODB.Recordset
+Dim ConnX As ADODB.Connection
+'---------------------------------------------------------
+#If VBA7 Then
+    Public Declare PtrSafe Function FindWindow Lib "user32" _
+                Alias "FindWindowA" _
+               (ByVal lpClassName As String, _
+                ByVal lpWindowName As String) As Long
+
+
+    Public Declare PtrSafe Function GetWindowLong Lib "user32" _
+                Alias "GetWindowLongA" _
+               (ByVal hWnd As Long, _
+                ByVal nIndex As Long) As Long
+
+
+    Public Declare PtrSafe Function SetWindowLong Lib "user32" _
+                Alias "SetWindowLongA" _
+               (ByVal hWnd As Long, _
+                ByVal nIndex As Long, _
+                ByVal dwNewLong As Long) As Long
+
+
+    Public Declare PtrSafe Function DrawMenuBar Lib "user32" _
+               (ByVal hWnd As Long) As Long
+#Else
+    Public Declare Function FindWindow Lib "user32" _
+                Alias "FindWindowA" _
+               (ByVal lpClassName As String, _
+                ByVal lpWindowName As String) As Long
+
+
+    Public Declare Function GetWindowLong Lib "user32" _
+                Alias "GetWindowLongA" _
+               (ByVal hWnd As Long, _
+                ByVal nIndex As Long) As Long
+
+
+    Public Declare Function SetWindowLong Lib "user32" _
+                Alias "SetWindowLongA" _
+               (ByVal hWnd As Long, _
+                ByVal nIndex As Long, _
+                ByVal dwNewLong As Long) As Long
+
+
+    Public Declare Function DrawMenuBar Lib "user32" _
+               (ByVal hWnd As Long) As Long
+#End If
+
+Sub HideBar(frm As Object)
+
+    Dim Style As Long, Menu As Long, hWndForm As Long
+    hWndForm = FindWindow("ThunderDFrame", frm.Caption)
+    Style = GetWindowLong(hWndForm, &HFFF0)
+    Style = Style And Not &HC00000
+    SetWindowLong hWndForm, &HFFF0, Style
+    DrawMenuBar hWndForm
+
+End Sub
+Sub DisplayInfo(info As String, Optional a As String = "Center")
+    'a to determine, centered, left or right alignment
+    If a = "Center" Then
+        ThisWorkbook.Sheets("Report-Builder").lblDisplay.TextAlign = 2 'fmTextAlignCenter
+    Else
+        ThisWorkbook.Sheets("Report-Builder").lblDisplay.TextAlign = 1 'fmTextAlignLeft
+    End If
+    With ThisWorkbook.Sheets("Report-Builder").lblDisplay
+        .Font.Size = 14
+        .Font.Name = "Calibri"
+    End With
+    ThisWorkbook.Sheets("Report-Builder").lblDisplay.Caption = info
+    DoEvents
+    DoEvents
+
+End Sub
+Sub DisplayCurrentTime()
+    Dim nextSecond As Date
+    If HasStarted Then
+        nextSecond = DateAdd("s", 1, Now())
+        ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+        Application.OnTime _
+            Procedure:="DisplayCurrentTime", _
+            EarliestTime:=nextSecond
+    End If
+    DoEvents
+    DoEvents
+End Sub
+Public Function GetAddress(i As Integer, Optional m As Byte) As String
+    'i as YearNumber, except 0 for Report.mdb, 1 for....
+    'm as the Split part for Year Data, like "5" in "orders_2001_5"
+    'wsName to indicate the ws is orders_2001_1 or order_details_2001_1
+    
+    Dim subFolderPath As String
+    subFolderPath = DBFilePath & "\" & "Split Enlarged Data-2001-2021" & "\" & i
+    
+    Dim FilePath As String
+    Dim FileType As String
+    FileType = ".xlsx"
+    Dim FileName As String
+    FileName = GetFileName(i, SplitNumber) & FileType
+    If SplitTotal > 1 Then
+        FilePath = subFolderPath & "\" & FileName
+    Else
+        FilePath = subFolderPath & "\" & "orders_" & i & FileType
+    End If
+        
+    Dim FSO As New FileSystemObject
+    Dim Address As String
+    
+    If FSO.FolderExists(DBFilePath) Then
+    
+        If i = 0 Then
+        
+            If Len(Dir(AccessDBFilePath & "\" & AccessDBFileName)) <> 0 Then
+                Address = AccessDBFilePath & "\" & AccessDBFileName
+            Else
+                MsgBox "The File of " & AccessDBFilePath & "\" & AccessDBFileName & " does not exist."
+            End If
+            
+        ElseIf i <= 2021 And i >= 2001 Then
+                
+                If FSO.FolderExists(subFolderPath) Then
+                    If Len(Dir(FilePath)) <> 0 Then 'check if .xlsx exists
+                    'filepath like "C:\...\orders_2001_1.xlsx
+                        Address = FilePath
+                    Else
+                        MsgBox "The File of " & FilePath & " does not exist."
+                    End If
+                End If
+            
+        End If
+          
+    Else
+        
+        MsgBox "The Folder of " & DBFilePath & " does not exist."
+        
+    End If
+    GetAddress = Address
+End Function
+Public Function GetFileInformation(i As Integer, n As Byte, Optional a As String = "Orders") As String
+    'i for yearnumber
+    'n for splitnumber
+    'a for worksheet Orders or OrderDetails
+    
+    Dim File As Object
+    Dim FSO
+    Dim FileAddress As String
+    Dim FileInformation As String
+    Dim RowsInFile As Long ' to count how many rows in each excel file
+    
+    Set FSO = CreateObject("Scripting.filesystemobject")
+    FileAddress = GetAddress(i, n)
+    Set File = FSO.GetFile(FileAddress)
+    RowsInFile = NumberOfRows
+    
+    FileInformation = vbNewLine & "File path: " & File.Path & ";" & vbNewLine & vbNewLine _
+                    & "File Size: " & Format(File.Size / 1024, "0,000") & "KB" _
+                    & ";" & vbNewLine & vbNewLine & "File Created Date: " & File.DateCreated _
+                    & ";" & vbNewLine & vbNewLine & "Rows to be processed in Worksheet " & a & ":" & RowsInFile
+    
+    GetFileInformation = FileInformation
+    
+End Function
+Public Function GetFileName(i As Integer, n As Byte, Optional a As String = "O") As String
+    'a to determine the file is Orders, OrderDetails or Customers
+    
+    Dim FileName As String
+    If a = "O" Then
+        FileName = "orders_" & i & "_" & n
+    ElseIf a = "OD" Then
+        FileName = "orderdetails_" & i & "_" & n
+    ElseIf a = "C" Then
+        FileName = "Customers"
+    End If
+    GetFileName = FileName
+End Function
+Public Function fetchRS(Optional FilePath As String, Optional sql As String, Optional a As String = "Access") As ADODB.Recordset
+
+    Dim ConnectionStr As String
+     
+    If a = "Excel" Then
+        ConnectionStr = "Provider=Microsoft.ACE.OLEDB.12.0;" _
+                       & "Data Source= " & FilePath & ";" _
+                       & "Extended Properties='Excel 12.0 Xml;HDR=YES';"
+    ElseIf a = "Sql" Then
+        ConnectionStr = "Provider=SQLOLEDB;SERVER=LAPTOP-AQDG7OJS;Database=exampleDatabase;Trusted_Connection=Yes"
+                  
+                    
+    Else
+                    
+        ConnectionStr = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" _
+                    & FilePath & ";Persist Security Info=False;"
+    End If
+    
+    Set ConnX = New ADODB.Connection
+    ConnX.Open ConnectionStr
+    
+    Dim rs As ADODB.Recordset
+    Set rs = New ADODB.Recordset
+    With rs
+        .CursorLocation = adUseClient
+        '.CursorType = adOpenDynamic
+        .CursorType = adOpenStatic
+        .LockType = adLockBatchOptimistic
+    End With
+    rs.Open sql, ConnX
+    Set fetchRS = rs
+    
+End Function
+
+Sub Report_8_PivotTable()
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+
+    If MsgBox("Are you sure to generate the report of ""ShipCountry-Orders in PivotTable ""in 21 years?" & _
+          "  The whole process takes about 1.5 minutes. If you wish to see the report of Selected Year(s), " & _
+          "Please go to button ""Run Reports"".", vbYesNo, "ShipCountry-Orders in PivotTable") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report8.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report8.Enabled = False
+    Worksheets("Report-Builder").Report8.Locked = True
+    Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime 'to display the end time with current time running
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+    'Below is to add codes of ShipCountry-Orders Report to prepare the data source for pivot table
+              
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim wsOrderOriginal As Worksheet
+ 
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+    
+    Dim FSO As New FileSystemObject
+    
+    Dim FileName1 As String
+    Dim filename2 As String
+    Dim filename3 As String
+    
+    'open appAccess to prepare for data loading in
+    Dim appAccess As Object
+    'create new access object
+    Set appAccess = CreateObject("Access.Application")
+    'open the acces project
+    Call appAccess.OpenCurrentDatabase(GetAddress(0))
+   
+    'delete/clean before process
+    'filename3 = AccessDBFilePath & "\" & "Backup of Orders_ShipCountry_Import.xlk"
+        'If FSO.FileExists(filename3) Then 'if backup file already exists, delete it
+            'FSO.DeleteFile filename3
+        'End If
+
+    'clean up before process
+    'filename1 = AccessDBFilePath & "\" & "Backup of Orders_ShipCountry_Import.xlk"
+    'If FSO.FileExists(filename1) Then
+        'FSO.DeleteFile filename1
+    'End If
+    Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+    
+    For YearNumber = 2001 To 2021
+        If YearNumber = 2021 Then
+            Special2021 = 4
+        Else
+            Special2021 = SplitTotal
+        End If
+        '-------------------------------------------------------------------
+        For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each yeare
+        DisplayInfo "Report8." & GetFileName(YearNumber, SplitNumber) & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        '--------------------------------------------------------------------
+            'filename3 = AccessDBFilePath & "\" & "Orders_ShipCountry_Import.xlsx"
+            'If FSO.FileExists(filename3) Then
+                'FSO.DeleteFile filename3
+            'End If
+            
+            filename2 = GetAddress(YearNumber)
+            'C:\Users\...\Split Enlarged Data-2001-2021\2001\orders_2001_1.xlsx
+            
+            ' copy yearly split data to Orders_ShipCountry_Import.xlsx
+            'FSO.CopyFile Source:=filename2, Destination:=filename3
+            
+            ' rename sheet to Orders,no need to change the name but in case the yearly data are different among each other
+            'Set wb = xlApp.Workbooks.Open(filename3)
+            'Set ws = wb.Sheets("Orders_" & YearNumber & "_" & SplitNumber)
+            'ws.Name = "Orders"
+            'NumberOfRows = ws.UsedRange.Rows.Count
+            'wb.Save
+            'wb.Close
+            'Set wb = Nothing
+            DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+            DisplayInfo DisplayFileInfo, "Left" 'Align Left
+            'after the partial data be copied within the same folder
+            'ready to load data from Excel to Access
+            'SavedImportProcess is
+            'Load from 'Orders_ShipCountry_Import.xlsx'
+            'to table of 'Orders_ShipCountry'
+            'saved as 'Import_Orders_ShipCountry_Import'
+            
+            appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+            'appAccess.DoCmd.RunSavedImportExport "Import_Orders_ShipCountry_Import"
+            'notes: make table of Orders_ShipCountry ready for import by setting up the index
+            'appAccess.DoCmd.TransferSpreadsheet _
+                TransferType:=acImport, _
+                SpreadSheetType:=acSpreadsheetTypeExcel12Xml, _
+                TableName:="Orders_ShipCountry1", _
+                FileName:=filename2, _
+                HasFieldNames:=True
+                
+                'Range:="Folio_Data_original$A1:B10"
+            appAccess.DoCmd.TransferSpreadsheet acImport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Orders_ShipCountry", _
+                        filename2, _
+                        True, _
+                        "orders_" & YearNumber & "_" & SplitNumber & "$"
+            
+           'in order to collect data of 21 years, instead of over-write by using the same table name_Orders_ShipCountry
+            'to create an assisting table od_temp
+            If YearNumber = 2001 And SplitNumber = 1 Then
+                appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+            End If
+            appAccess.DoCmd.RunSQL "Insert into ShipCountry_temp select OrderID, OrderDate, ShipCountry from Orders_ShipCountry"
+            
+            On Error Resume Next
+            appAccess.DoCmd.RunSQL "Drop Table [orders_" & YearNumber & "_" & SplitNumber & "$_ImportErrors]"
+            On Error GoTo Dingdong
+            
+        '-----------------------------
+        Next SplitNumber
+
+    Next YearNumber ' all 21-year-data is inserted into ShipCountry_temp table now
+    
+    'do the math
+    DisplayInfo "Report8-Calculating" & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    'export package
+    'from Table of "Report8"
+    'to "Report8.xlsx" in AccessDBFilePath
+    'and saved the procecure as "Export_Report8_Export"
+    'appAccess.DoCmd.RunSavedImportExport "Export_Report8_Export"
+    appAccess.DoCmd.RunSQL "delete from Report8"
+    'needs to quote below query
+    appAccess.DoCmd.RunSQL "insert into Report8 " & _
+                    "(ShipCountry, [Year], [Orders]) " & _
+                    "select ShipCountry, YEAR(OrderDate) AS [Year]," & _
+                    "COUNT(OrderID) as [Orders]" & _
+                    "FROM ShipCountry_temp " & _
+                    "GROUP BY ShipCountry, YEAR(OrderDate) ORDER BY ShipCountry"
+                    
+    DisplayInfo "Report8-Almost Done" & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    FileName1 = AccessDBFilePath & "\" & "Report8.xlsx"
+    If FSO.FileExists(FileName1) Then
+        FSO.DeleteFile FileName1
+    End If
+    'export package
+    appAccess.DoCmd.RunSavedImportExport "Export_Report8_Export"
+     
+    ' clean-up
+    appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+    appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+    
+    FileName1 = AccessDBFilePath & "\"
+
+    If FSO.FileExists(FileName1 & "Orders_ShipCountry_Import.xlsx") Then
+        FSO.DeleteFile FileName1 & "Orders_ShipCountry_Import.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Orders_ShipCountry_Import.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Orders_ShipCountry_Import.xlk"
+    End If
+    
+    'close app
+    appAccess.DoCmd.Quit
+    Set appAccess = Nothing
+    
+    '-----------------------------------------------
+    
+    Dim PSheet As Worksheet
+    Dim DSheet As Worksheet
+    Dim PCache As PivotCache
+    Dim PTable As PivotTable
+    Dim PRange As Range
+    Dim LastRow As Long
+    Dim LastCol As Long
+    
+    'open Report8.xlsx
+    filename2 = AccessDBFilePath & "\" & "Report8.xlsx"
+    Set wb = xlApp.Workbooks.Open(filename2)
+    Set ws = wb.Sheets(1)
+    ws.Name = "DataSource"
+    
+    xlApp.DisplayAlerts = False
+    wb.Worksheets.Add.Name = "PivotTable"
+    'Sheets.Add Before:=ActiveSheet
+    xlApp.DisplayAlerts = True
+    
+    wb.Save
+    
+    DisplayInfo "Generating, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    Set PSheet = wb.Sheets("PivotTable")
+    Set DSheet = wb.Sheets("DataSource")
+
+    'Define Data Range of Report8
+    LastRow = DSheet.Cells(Rows.Count, 1).End(xlUp).Row
+    LastCol = DSheet.Cells(1, Columns.Count).End(xlToLeft).Column
+    Set PRange = DSheet.Cells(1, 1).Resize(LastRow, LastCol)
+
+    wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=PRange, Version:=xlPivotTableVersion12).CreatePivotTable TableDestination:=PSheet.Range("A1"), TableName:="SumofOrders", DefaultVersion:=xlPivotTableVersion12
+
+    Set PTable = PSheet.PivotTables("SumofOrders")
+    
+    PTable.ManualUpdate = True
+    
+    'Insert Row Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("ShipCountry")
+    .Orientation = xlRowField
+    .Position = 1
+    End With
+    
+    'Insert Column Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("Year")
+    .Orientation = xlColumnField
+    .Position = 1
+    End With
+    
+    'Insert Data Field
+    With PSheet.PivotTables("SumofOrders").PivotFields("Orders")
+    .Orientation = xlDataField
+    .Position = 1
+    .Function = xlSum
+    .NumberFormat = "#,##0"
+    .Name = "Sum of Orders"
+    End With
+    
+    'autofit all columns
+    PSheet.Columns("A:F").EntireColumn.AutoFit
+       
+    PTable.ManualUpdate = False
+    
+    'Format Pivot
+    PSheet.PivotTables("SumofOrders").ShowTableStyleRowStripes = True
+    PSheet.PivotTables("SumofOrders").TableStyle2 = "PivotStyleMedium9"
+    PSheet.PivotTables("SumofOrders").NullString = "0" 'to replace empty cells with ZERO!
+    
+    'create a folder for Report8
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report8 PvtTable example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report8 PvtTable example")
+    End If
+    
+    wb.SaveAs ThisWorkbook.Path & "\Report8 PvtTable example\" & "Report 8.ShipCountry-Orders-in-Pivot-Table from_Year_2001_to_2021_" _
+                & Format(Now, "YYYYMMDDHHMMSS") & ".xlsx"
+    wb.Close
+    xlApp.Quit
+    
+    FileName1 = AccessDBFilePath & "\"
+        If FSO.FileExists(FileName1 & "Report8.xlsx") Then
+        FSO.DeleteFile FileName1 & "Report8.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Report 8.ShipCountry-Orders-in-Pivot-Table.xlsx") Then
+        FSO.DeleteFile FileName1 & "Report 8.ShipCountry-Orders-in-Pivot-Table.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Report 8.ShipCountry-Orders-in-Pivot-Table.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Report 8.ShipCountry-Orders-in-Pivot-Table.xlk"
+    End If
+    
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and ShipCountry-Orders in Pivot-Table Report " _
+            & "from_2001_to_2021 generated.", vbInformation
+
+    Write_log 1, "ShipCountry-Orders-in-Pivot from 2001 to 2021", MinutesElapsed
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    
+End If
+Application.DisplayAlerts = True
+Exit Sub
+Dingdong:
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    xlApp.Quit
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotTable-Report from_2001_to_2021", "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotTable-Report from_2001_to_2021 ", Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    Application.DisplayAlerts = True
+End Sub
+Sub Report_8_PivotTableSelectedYears(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+    If MsgBox("Are you sure to generate the report of ""ShipCountry-Orders in PivotTable ""in Year " & _
+        Left(YearNumbers, YearsStringLength - 1) & "?" & _
+        "  The whole process takes about " & Format((4 * countyear) / 86400, "hh:mm:ss") & " minute(s).", _
+        vbYesNo, "ShipCountry-Orders in PivotTable") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report8.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report8.Enabled = False
+    Worksheets("Report-Builder").Report8.Locked = True
+    'Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime
+    
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+   
+    'to decide which stage it is
+    'Stage=1 means the Error Dingdong can just delete report8.xlsx
+    'stage=2 means the background xlapp will be running still, needs
+    'to find a way to close it
+    
+    'Below is to add codes of ShipCountry-Orders Report to prepare the data source for pivot table
+    Dim FSO As New FileSystemObject
+    Dim FileName1 As String
+    Dim filename2 As String
+    
+    'open appAccess to prepare for data loading in
+    Dim appAccess As Object
+    'create new access object
+    Set appAccess = CreateObject("Access.Application")
+    'open the acces project
+    Call appAccess.OpenCurrentDatabase(GetAddress(0))
+    'appAccess.Quit--here cannot quit the app, docmd needs to open the file physically
+    
+    Dim Special2021 As Byte 'as Year 2021 only has 4 split parts
+    Dim countComma As Byte ' to count how many commas in the string of 'YearNumbers'
+    'YearNumbers takes the format of '2016,2019,2021,'
+    Dim m As Byte 'moving through the YearNumbers to find the sub year string
+    Dim Position As Byte 'mark the starting place for the next search
+    
+    Dim Catlog As ADOX.Catalog
+    Dim conn As ADODB.Connection
+    Set conn = New ADODB.Connection
+    Dim Connect As String
+    Connect = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" _
+                    & GetAddress(0) & ";Persist Security Info=False;"
+    conn.Open Connect
+    Set Catlog = New ADOX.Catalog
+    Catlog.ActiveConnection = conn
+
+    
+    For m = 1 To YearsStringLength
+        If InStr(m, YearNumbers, ",") <> 0 Then
+            Position = InStr(m, YearNumbers, ",")
+            m = Position
+            countComma = countComma + 1
+            YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+            If YearNumber = 2021 Then
+                Special2021 = 4
+            Else
+                Special2021 = SplitTotal
+            End If
+            '-------------------------------------------------------------------
+            For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+            DisplayInfo "Report8." & GetFileName(YearNumber, SplitNumber) & ", " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+            '--------------------------------------------------------------------
+                filename2 = GetAddress(YearNumber)
+                
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                
+                appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+
+                appAccess.DoCmd.TransferSpreadsheet acImport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Orders_ShipCountry", _
+                        filename2, _
+                        True, _
+                        "orders_" & YearNumber & "_" & SplitNumber & "$"
+                        
+                If countComma = 1 And SplitNumber = 1 Then
+                    appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+                End If
+                
+                appAccess.DoCmd.RunSQL "Insert into ShipCountry_temp select OrderID, OrderDate, ShipCountry from Orders_ShipCountry"
+Stage = 1
+                For x = 0 To Catlog.Tables.Count - 1
+                
+                    If Catlog.Tables.Item(x).Type = "TABLE" Then
+                    'here Table needs to be UPPER CASE....
+                        If InStr(1, Catlog.Tables.Item(x).Name, "Error") > 0 Then
+                            
+                            appAccess.DoCmd.RunSQL "Drop Table [" & Catlog.Tables.Item(x).Name & "]"
+                        End If
+                    End If
+                Next x
+               
+            '-----------------------------
+            Next SplitNumber
+        End If
+    Next m ' all Selected years data is inserted into ShipCountry_temp table now
+    
+    'do the math
+    DisplayInfo "Report8-Calculating" & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+
+    appAccess.DoCmd.RunSQL "delete from Report8"
+    'needs to quote below query
+    appAccess.DoCmd.RunSQL "insert into Report8 " & _
+                    "(ShipCountry, [Year], [Orders]) " & _
+                    "select ShipCountry, YEAR(OrderDate) AS [Year]," & _
+                    "COUNT(OrderID) as [Orders]" & _
+                    "FROM ShipCountry_temp " & _
+                    "GROUP BY ShipCountry, YEAR(OrderDate) ORDER BY ShipCountry"
+                    
+    DisplayInfo "Report8-Almost Done" & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    'export to excel
+    'create a folder for Report8
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report8 PvtTable example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report8 PvtTable example")
+    End If
+    TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+    FileName1 = ThisWorkbook.Path & "\Report8 PvtTable example\" & "Report 8.ShipCountry-Orders-in-Pivot-Table in Year " _
+        & Left(YearNumbers, YearsStringLength - 1) & "_" _
+        & TimeStamp & ".xlsx"
+    
+Stage = 2
+
+    appAccess.DoCmd.TransferSpreadsheet acExport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Report8", _
+                        FileName1, _
+                        True
+    'report8 is the table name, be aware
+    ' clean-up
+    appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+    appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+    appAccess.DoCmd.RunSQL "delete from Report8"
+    
+    'close app
+    appAccess.DoCmd.Quit
+    Set appAccess = Nothing
+    
+    '-----------------------------------------------
+    
+    Dim PSheet As Worksheet
+    Dim DSheet As Worksheet
+    Dim PCache As PivotCache
+    Dim PTable As PivotTable
+    Dim PRange As Range
+    Dim LastRow As Long
+    Dim LastCol As Long
+    
+              
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+    'open Report8.xlsx
+    
+    Set wb = xlApp.Workbooks.Open(FileName1)
+    Set ws = wb.Sheets(1)
+    ws.Name = "DataSource"
+    
+    xlApp.DisplayAlerts = False
+    wb.Worksheets.Add.Name = "PivotTable"
+    'Sheets.Add Before:=ActiveSheet
+    xlApp.DisplayAlerts = True
+    
+    wb.Save
+    
+    DisplayInfo "Generating, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    Set PSheet = wb.Sheets("PivotTable")
+    Set DSheet = wb.Sheets("DataSource")
+
+    'Define Data Range of Report8
+    LastRow = DSheet.Cells(Rows.Count, 1).End(xlUp).Row
+    LastCol = DSheet.Cells(1, Columns.Count).End(xlToLeft).Column
+    Set PRange = DSheet.Cells(1, 1).Resize(LastRow, LastCol)
+
+    wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=PRange, Version:=xlPivotTableVersion12).CreatePivotTable TableDestination:=PSheet.Range("A1"), TableName:="SumofOrders", DefaultVersion:=xlPivotTableVersion12
+
+    Set PTable = PSheet.PivotTables("SumofOrders")
+    
+    PTable.ManualUpdate = True
+    
+    'Insert Row Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("ShipCountry")
+    .Orientation = xlRowField
+    .Position = 1
+    End With
+    
+    'Insert Column Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("Year")
+    .Orientation = xlColumnField
+    .Position = 1
+    End With
+    
+    'Insert Data Field
+    With PSheet.PivotTables("SumofOrders").PivotFields("Orders")
+    .Orientation = xlDataField
+    .Position = 1
+    .Function = xlSum
+    .NumberFormat = "#,##0"
+    .Name = "Sum of Orders"
+    End With
+       
+    'autofit all columns
+    'PSheet.Columns("A:F").EntireColumn.AutoFit
+    PSheet.Cells.EntireColumn.AutoFit
+    PTable.ManualUpdate = False
+    
+    'Format Pivot
+    PSheet.PivotTables("SumofOrders").ShowTableStyleRowStripes = True
+    PSheet.PivotTables("SumofOrders").TableStyle2 = "PivotStyleMedium9"
+    PSheet.PivotTables("SumofOrders").NullString = "0" 'to replace empty cells with ZERO!
+    
+    wb.Save
+    wb.Close
+    xlApp.Quit
+    
+    
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and ShipCountry-Orders in Pivot-Table Report generated.", vbInformation
+
+    Write_log 1, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    
+End If
+Application.DisplayAlerts = True
+
+Exit Sub
+Dingdong:
+On Error Resume Next
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    
+    If Stage = 2 Then
+    
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    'ElseIf Stage = 1 Then
+    'Dont need to drop the error table
+    'as everytime the codes run, the error table will be cleared
+       
+    End If
+    
+    On Error GoTo Dingdong2
+   
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    Application.DisplayAlerts = True
+Exit Sub
+Dingdong2:
+    
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    Application.DisplayAlerts = True
+End Sub
+Sub DailyReport_OrdersInPTable()
+    Call Report_8_PivotTableSelectedYearsADO(1, "2021,")
+End Sub
+Sub Report_8_PivotTableSelectedYearsADO(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+    If MsgBox("Are you sure to generate the report of ""ShipCountry-Orders in PivotTable ""in Year " & _
+        Left(YearNumbers, YearsStringLength - 1) & "?" & _
+        "  The whole process takes about " & Format((7 * countyear) / 86400, "hh:mm:ss") & " minute(s).", _
+        vbYesNo, "ShipCountry-Orders in PivotTable") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report8.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report8.Enabled = False
+    Worksheets("Report-Builder").Report8.Locked = True
+    Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime
+    
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+    'Below is to add codes of ShipCountry-Orders Report to prepare the data source for pivot table
+                  
+    Dim FSO As New FileSystemObject
+    Dim FileName1 As String
+    Dim filename2 As String
+
+    'Dim appAccess As Object
+    Dim NewAccessDBFilePath As String
+    TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+    NewAccessDBFilePath = ThisWorkbook.Path & "\AccessDB.accdb"
+    'If FSO.FileExists(NewAccessDBFilePath) Then
+        'FSO.DeleteFile (NewAccessDBFilePath)
+    'End If
+    
+    'Set appAccess = CreateObject("access.application")
+    'Call appAccess.NewCurrentDatabase(NewAccessDBFilePath)
+       
+    Dim WorkSpa As Workspace
+    Dim DB As Database
+    Set WorkSpa = DBEngine.Workspaces(0)
+    If Dir(NewAccessDBFilePath) <> "" Then
+        Kill NewAccessDBFilePath
+    End If
+    Set DB = WorkSpa.CreateDatabase(NewAccessDBFilePath, dbLangGeneral)
+    DB.Execute "Create table ShipCountry_temp ([OrderID] double, [OrderDate] date, [ShipCountry] text)"
+
+    Stage = 1
+    'DoCmd.TransferDatabase acExport, "Microsoft Access", NewAccessDBFilePath, acTable, SourceTable, DestinationTable, StructureOnly
+    'DB.Execute "Create table ShipCountry_temp ([OrderID] double, [OrderDate] date, [ShipCountry] text)"
+    DB.Close
+    
+    Dim conn As ADODB.Connection
+    Dim recset As ADODB.Recordset
+    Dim ConnectionStr As String
+
+    Set conn = New ADODB.Connection
+    ConnectionStr = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" _
+                & NewAccessDBFilePath & ";Persist Security Info=False;"
+    conn.Open ConnectionStr
+    
+    'Dim ConString As String
+    'Dim Con As ADODB.Connection
+    'Set Con = New ADODB.Connection
+    'ConString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" _
+                & NewAccessDBFilePath & ";Persist Security Info=False;"
+    'Con.Open ConString
+    'to test one closed access can have multiple ado connections
+    
+    Set recset = New ADODB.Recordset
+    With recset
+        .CursorLocation = adUseClient
+        '.CursorType = adOpenKeyset
+        .CursorType = adOpenStatic
+        .LockType = adLockBatchOptimistic
+    End With
+    recset.Open "Select OrderID, OrderDate, ShipCountry from ShipCountry_temp where 1=0", conn
+    'Set recset.ActiveConnection = Nothing
+    
+    'conn.Close
+    'Set conn = Nothing
+    Dim rspartial As ADODB.Recordset
+    Dim sql As String
+
+    Dim Special2021 As Byte 'as Year 2021 only has 4 split parts
+    Dim countComma As Byte ' to count how many commas in the string of 'YearNumbers'
+    'YearNumbers takes the format of '2016,2019,2021,'
+    countComma = 0
+    Dim m As Byte 'moving through the YearNumbers to find the sub year string
+    m = 0
+    Dim Position As Byte 'mark the starting place for the next search
+    Position = 0
+    Dim n As Long
+    
+    For m = 1 To YearsStringLength
+        If InStr(m, YearNumbers, ",") <> 0 Then
+            Position = InStr(m, YearNumbers, ",")
+            m = Position
+            countComma = countComma + 1
+            YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+            If YearNumber = 2021 Then
+                Special2021 = 4
+            Else
+                Special2021 = SplitTotal
+            End If
+            '-------------------------------------------------------------------
+            For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+            DisplayInfo "Report8." & GetFileName(YearNumber, SplitNumber) & ", " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+            '--------------------------------------------------------------------
+                filename2 = GetAddress(YearNumber)
+                
+                sql = "select [OrderID],[OrderDate],[ShipCountry] from [orders_" & YearNumber & "_" & SplitNumber & "$]"
+                Set rspartial = New ADODB.Recordset
+                Set rspartial = fetchRS(filename2, sql, "Excel")
+                
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                NumberOfRows = rspartial.RecordCount
+                
+                rspartial.MoveFirst
+                Do While Not rspartial.EOF
+                    recset.AddNew
+                    For n = 0 To rspartial.Fields.Count - 1
+                        recset.Fields(rspartial.Fields(n).Name).Value = rspartial.Fields(n).Value
+                    Next n
+                    rspartial.MoveNext
+                    'recset.Update 11S
+                Loop
+                'Set conn = New ADODB.Connection
+                'ConnectionStr = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" _
+                & NewAccessDBFilePath & ";Persist Security Info=False;"
+  
+               'conn.Open ConnectionStr
+               'Set recset.ActiveConnection = conn
+               recset.UpdateBatch
+               'Set recset.ActiveConnection = Nothing
+               'conn.Close
+               'Set conn = Nothing
+               
+               '---------------
+               'below is test for rs.save
+               
+               'recset.MoveFirst
+               
+                'If FSO.FileExists(ThisWorkbook.Path & "\" & "RSsave.dat") Then
+                    'FSO.DeleteFile (ThisWorkbook.Path & "\" & "RSsave.dat")
+                'End If
+                'recset.Save ThisWorkbook.Path & "\" & "RSsave.dat"
+                ', adPersistADTG
+                 'Set recset = Nothing
+                
+                 'Now reload the data from the file
+                 'Set recset = New ADODB.Recordset
+                 'recset.Open ThisWorkbook.Path & "\" & "RSsave.dat", , adOpenStatic, _
+                    'adLockBatchOptimistic, adCmdFile
+                    'recset.MoveFirst
+                             '7S
+            '-----------------------------
+            
+            Next SplitNumber
+            'recset.UpdateBatch
+            '13S
+        End If
+    Next m ' all Selected years data is inserted into ShipCountry_temp table now
+    'recset.UpdateBatch
+    'do the math
+    DisplayInfo "Report8-Calculating" & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+
+    Set conn = New ADODB.Connection
+    conn.Open ConnectionStr
+
+    Set recset = New ADODB.Recordset
+    Dim ssql As String
+    
+    ssql = "select ShipCountry,COUNT(OrderID) as [Orders] , " & _
+                    "YEAR(OrderDate) AS [Year] " & _
+                    "FROM ShipCountry_temp " & _
+                    "GROUP BY ShipCountry, YEAR(OrderDate) ORDER BY ShipCountry "
+    recset.Open ssql, conn, adOpenDynamic, adLockBatchOptimistic
+    
+    DisplayInfo "Report8-Almost Done" & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+'----------------------------------------
+
+    Dim PSheet As Worksheet
+    Dim DSheet As Worksheet
+    Dim PCache As PivotCache
+    Dim PTable As PivotTable
+    Dim PRange As Range
+    Dim LastRow As Long
+    Dim LastCol As Long
+    
+    'create a folder for Report8
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report8 PvtTable example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report8 PvtTable example")
+    End If
+    
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim wsOrderOriginal As Worksheet
+    
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+    TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+    FileName1 = ThisWorkbook.Path & "\Report8 PvtTable example\" & "Report 8.ShipCountry-Orders-in-Pivot-Table in Year " _
+        & Left(YearNumbers, YearsStringLength - 1) & "_" _
+        & TimeStamp & ".xlsx"
+    xlApp.Workbooks.Add.SaveAs FileName1
+Stage = 2
+    Set wb = xlApp.Workbooks.Open(FileName1)
+    Set ws = wb.Sheets(1)
+    ws.Name = "DataSource"
+    ws.Cells(1, 1) = recset.Fields(0).Name
+    ws.Cells(1, 2) = recset.Fields(1).Name
+    ws.Cells(1, 3) = recset.Fields(2).Name
+    ws.Cells(2, 1).CopyFromRecordset recset
+    
+    conn.Close
+    Set conn = Nothing
+    If Dir(NewAccessDBFilePath) <> "" Then
+        Kill NewAccessDBFilePath
+    End If
+    
+    
+    
+    xlApp.DisplayAlerts = False
+    wb.Worksheets.Add.Name = "PivotTable"
+    'Sheets.Add Before:=ActiveSheet
+    xlApp.DisplayAlerts = True
+    
+    'wb.Save
+    
+    DisplayInfo "Generating, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    Set PSheet = wb.Sheets("PivotTable")
+    Set DSheet = wb.Sheets("DataSource")
+
+    'Define Data Range of Report8
+    LastRow = DSheet.Cells(Rows.Count, 1).End(xlUp).Row
+    LastCol = DSheet.Cells(1, Columns.Count).End(xlToLeft).Column
+    Set PRange = DSheet.Cells(1, 1).Resize(LastRow, LastCol)
+
+    wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=PRange, Version:=xlPivotTableVersion12).CreatePivotTable TableDestination:=PSheet.Range("A1"), TableName:="SumofOrders", DefaultVersion:=xlPivotTableVersion12
+
+    Set PTable = PSheet.PivotTables("SumofOrders")
+    
+    PTable.ManualUpdate = True
+    
+    'Insert Row Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("ShipCountry")
+    .Orientation = xlRowField
+    .Position = 1
+    End With
+    
+    'Insert Column Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("Year")
+    .Orientation = xlColumnField
+    .Position = 1
+    End With
+    
+    'Insert Data Field
+    With PSheet.PivotTables("SumofOrders").PivotFields("Orders")
+    .Orientation = xlDataField
+    .Position = 1
+    .Function = xlSum
+    .NumberFormat = "#,##0"
+    .Name = "Sum of Orders"
+    End With
+       
+    'autofit all columns
+    'PSheet.Columns("A:F").EntireColumn.AutoFit
+    'PSheet.UsedRange.EntireColumn.AutoFit
+    PSheet.Cells.EntireColumn.AutoFit
+    
+    PTable.ManualUpdate = False
+    
+    'Format Pivot
+    PSheet.PivotTables("SumofOrders").ShowTableStyleRowStripes = True
+    PSheet.PivotTables("SumofOrders").TableStyle2 = "PivotStyleMedium9"
+    PSheet.PivotTables("SumofOrders").NullString = "0" 'to replace empty cells with ZERO!
+    
+
+    wb.Save
+    wb.Close
+    xlApp.Quit
+    
+
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and ShipCountry-Orders in Pivot-Table Report generated.", vbInformation
+
+    Write_log 1, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    
+End If
+Application.DisplayAlerts = True
+
+Exit Sub
+Dingdong:
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    If Stage = 2 Then
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    Else
+        conn.Close
+        Set conn = Nothing
+        
+        If FSO.FileExists(NewAccessDBFilePath) Then
+            FSO.DeleteFile (NewAccessDBFilePath)
+        End If
+        'or below
+        'If Dir(NewAccessDBFilePath) <> "" Then
+            'Kill NewAccessDBFilePath
+        'End If
+    End If
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotTable in Year " & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report8.Caption = "Report 8-ShipCountry-Orders in Pivot Table"
+    Worksheets("Report-Builder").Report8.Enabled = True
+    Worksheets("Report-Builder").Report8.Locked = False
+    Application.DisplayAlerts = True
+End Sub
+
+Sub Report_10_Top500CustomersSelectedYears(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error Resume Next
+On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+        
+    'note 1 to turn off automatic spreadsheet calculation
+    Application.Calculation = xlCalculationManual
+    'note 2 to turn off screen updates
+    'Application.ScreenUpdating = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+
+    If MsgBox("Are you sure to generate the report of Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "?" & _
+          "  The whole process takes about " & Format((11 * countyear) / 86400, "hh:mm:ss") & " minute(s).", vbYesNo, _
+          "Top 500 Customers Report") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report10.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report10.Enabled = False
+    Worksheets("Report-Builder").Report10.Locked = True
+    Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+    'Below is to use ACCESS to import source data and do the query
+        
+    Dim FSO As New FileSystemObject
+    Dim FileName1 As String
+    Dim filename2 As String
+    
+    Dim i As Integer
+    
+    'open appAccess to prepare for data loading in
+    Dim appAccess As Access.Application
+    'create new access object
+    Set appAccess = New Access.Application
+    'open the acces project
+    'Call appAccess.OpenCurrentDatabase(GetAddress(0))
+    Dim NewAccessDBFilePath As String
+    TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+    NewAccessDBFilePath = ThisWorkbook.Path & "\AccessDB.accdb"
+    
+    'Dim WorkSpa As Workspace
+    'Dim DB As Database
+    'Set WorkSpa = DBEngine.Workspaces(0)
+    If Dir(NewAccessDBFilePath) <> "" Then
+        Kill NewAccessDBFilePath
+    End If
+    'Set DB = WorkSpa.CreateDatabase(NewAccessDBFilePath, dbLangGeneral)
+    'DB.Close
+    Call appAccess.NewCurrentDatabase(NewAccessDBFilePath)
+        
+    'DB.Execute "Create table Orders ([CustomerID] text, [SpendingAmount] currency)"
+    'DB.Execute "Create table Customers ([CustomerID] text, [CompanyName] text, [Country] text,[City] text)"
+    
+    'first to import customers
+    DisplayInfo "Report10.Loading Customers" & ", " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    FileName1 = DBFilePath & "\" & "Customers.xlsx" 'from Customers.xlsx to Customers.table, saved as Import-Customers
+    'appAccess.DoCmd.RunSQL "Delete from Customers"
+    appAccess.DoCmd.TransferSpreadsheet acImport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Customers", _
+                        FileName1, _
+                        True, _
+                        "Customers" & "$"
+Stage = 1
+    
+
+    Dim x As Integer
+        
+    Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+    Dim countComma As Byte
+    Dim m As Byte
+    Dim Position As Byte
+    
+    For m = 1 To YearsStringLength
+        If InStr(m, YearNumbers, ",") <> 0 Then
+            Position = InStr(m, YearNumbers, ",")
+            m = Position
+            countComma = countComma + 1
+            YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+            If YearNumber = 2021 Then
+                Special2021 = 4
+            Else
+                Special2021 = SplitTotal
+            End If
+            
+            '-------------------------------------------------------------------
+            For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+                DisplayInfo "Report10.Loading Orders and OrderDetails in Year " & YearNumber & "_" & SplitNumber & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+          
+                filename2 = GetAddress(YearNumber)
+                 '"C:\...\orders_2001_1.xlsx"
+
+                '----------------------------------------------------------------------
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                   
+                appAccess.DoCmd.TransferSpreadsheet acImport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Orders", _
+                        filename2, _
+                        True, _
+                        "orders_" & YearNumber & "_" & SplitNumber & "$"
+                NumberOfRows = DCount("*", "Orders")
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+          
+
+                '----------------------------------------------------------------------
+
+                appAccess.DoCmd.TransferSpreadsheet acImport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "OrderDetails", _
+                        filename2, _
+                        True, _
+                        "order_details_" & YearNumber & "_" & SplitNumber & "$"
+
+                NumberOfRows = DCount("*", "Orderdetails")
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                'For x = 0 To Catlog.Tables.Count - 1
+                
+                    'If Catlog.Tables.Item(x).Type = "TABLE" Then
+                    'here Table needs to be UPPER CASE....
+                        'If InStr(1, Catlog.Tables.Item(x).Name, "Error") > 0 Then
+                            
+                            'appAccess.DoCmd.RunSQL "Drop Table [" & Catlog.Tables.Item(x).Name & "]"
+                        'End If
+                    'End If
+                'Next x
+                '----------------------------------------------------------------------
+                'do the math
+                Dim sql As String
+                If countComma = 1 And SplitNumber = 1 Then
+                    'appAccess.DoCmd.RunSQL "delete from Media"
+                    'appAccess.DoCmd.RunSQL "delete from Report10"
+                    sql = "SELECT c.CustomerID, CompanyName, Country, City, SpendAmount into Media " _
+                            & " FROM (" _
+                            & " SELECT customerID," _
+                            & " SUM(IIF(isnull(Unitprice*quantity*(1-discount)),0,(Unitprice*quantity*(1-discount)))) AS SpendAmount" _
+                            & " FROM Orders AS o INNER JOIN OrderDetails AS od" _
+                            & " ON o.OrderID=od.OrderID" _
+                            & " GROUP BY CustomerID )AS t" _
+                            & " INNER JOIN Customers AS c" _
+                            & " ON t.CustomerID=c.CustomerID"
+                Else
+                
+                    sql = "Insert into Media " _
+                            & " SELECT c.CustomerID, CompanyName, Country, City, SpendAmount" _
+                            & " FROM (" _
+                            & " SELECT customerID," _
+                            & " SUM(IIF(isnull(Unitprice*quantity*(1-discount)),0,(Unitprice*quantity*(1-discount)))) AS SpendAmount" _
+                            & " FROM Orders AS o INNER JOIN OrderDetails AS od" _
+                            & " ON o.OrderID=od.OrderID" _
+                            & " GROUP BY CustomerID )AS t" _
+                            & " INNER JOIN Customers AS c" _
+                            & " ON t.CustomerID=c.CustomerID"
+                End If
+                
+                DisplayInfo "Report10-Calculating in Year " & YearNumber & ", " _
+                            & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                            
+                'the table Media is the media table for all customers' spendAmount
+                appAccess.DoCmd.SetWarnings False
+                appAccess.DoCmd.RunSQL sql
+                appAccess.DoCmd.RunSQL "delete from OrderDetails"
+                appAccess.DoCmd.RunSQL "delete from Orders"
+                appAccess.DoCmd.SetWarnings True
+                '--------------------------------------------------------------------
+            Next SplitNumber
+        End If
+    Next m
+   
+    DisplayInfo "Report10-Almost Done, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    'select the top 500
+    sql = "Select Top 500 CustomerID, CompanyName, Country, City, sum(SpendAmount) as TotalSpendAmount into Report10 " _
+        & " FROM Media" _
+        & " Group by CustomerID, CompanyName, Country, City" _
+        & " Order by sum(SpendAmount) Desc"
+    appAccess.DoCmd.RunSQL sql
+
+    'Export Report10
+    'create Report within access folder
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report10 Top 500 example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report10 Top 500 example")
+    End If
+    
+    TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+    FileName1 = ThisWorkbook.Path & "\Report10 Top 500 example\" & _
+                "Report 10. Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "_" & _
+                TimeStamp & ".xlsx"
+                
+    appAccess.DoCmd.TransferSpreadsheet acExport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Report10", _
+                        FileName1, _
+                        True
+                        
+    'Close access
+    appAccess.DoCmd.Quit
+    Set appAccess = Nothing
+    If Dir(NewAccessDBFilePath) <> "" Then
+        Kill NewAccessDBFilePath
+    End If
+    
+    Dim FormatTime As String
+    Dim FormatStart As Double
+    FormatStart = Timer
+    
+    '-------------------------------------------
+    'formatting report10
+             
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+
+    Set wb = xlApp.Workbooks.Open(FileName1)
+Stage = 2
+    xlApp.DisplayAlerts = False
+    
+    'insert blank boarders
+    wb.Sheets("Report10").Rows("1:1").Select
+    wb.Sheets("Report10").Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+    wb.Sheets("Report10").Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+    wb.Sheets("Report10").Columns("A:A").Select
+    wb.Sheets("Report10").Columns("A:A").Insert shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+    
+    'format the first heading
+    With wb.Sheets("Report10").Range("B2:F2")
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlBottom
+        .WrapText = False
+        .Orientation = 0
+        .AddIndent = False
+        .IndentLevel = 0
+        .ShrinkToFit = False
+        .ReadingOrder = xlContext
+        .MergeCells = False
+    End With
+    wb.Sheets("Report10").Range("B2").FormulaR1C1 = "Top 500 Customers"
+    wb.Sheets("Report10").Range("B2:F2").Merge
+
+    With wb.Sheets("Report10").Range("B4:F503").Font
+        '.Name = "Calibri"
+        .Size = 10
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ColorIndex = xlAutomatic
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontMinor
+    End With
+    
+
+    With wb.Sheets("Report10").Range("B2:F2").Font
+        .Name = "Calibri"
+        .Size = 16
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ColorIndex = xlAutomatic
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontMinor
+    End With
+    
+    'format the second heading
+    With wb.Sheets("Report10").Range("B3:F3").Font
+        .Name = "Calibri"
+        .Size = 12
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ColorIndex = xlAutomatic
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontMinor
+    End With
+    wb.Sheets("Report10").Range("B3:F3").Font.Bold = True
+    
+    'With xlApp.Selection.Interior
+    With wb.Sheets("Report10").Range("B2:F2").Interior
+        .Pattern = xlSolid
+        .PatternColorIndex = xlAutomatic
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = 0.399975585192419
+        .PatternTintAndShade = 0
+    End With
+    
+    wb.Sheets("Report10").Range("B3:F3").Select
+    With xlApp.Selection.Interior
+        .Pattern = xlSolid
+        .PatternColorIndex = xlAutomatic
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = 0.599993896298105
+        .PatternTintAndShade = 0
+    End With
+    
+    'add zebra
+    wb.Sheets("Report10").Range("B4:F503").FormatConditions.Add Type:=xlExpression, Formula1:= _
+        "=MOD(ROW(),2)"
+    wb.Sheets("Report10").Range("B4:F503").FormatConditions(wb.Sheets("Report10").Range("B4:F503").FormatConditions.Count).SetFirstPriority
+    With wb.Sheets("Report10").Range("B4:F503").FormatConditions(1).Interior
+        .PatternColorIndex = xlAutomatic
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = 0.799981688894314
+    End With
+    wb.Sheets("Report10").Range("B4:F503").FormatConditions(1).StopIfTrue = False
+    
+    'add $ sign before the Currency
+    wb.Sheets("Report10").Range("F4:F503").NumberFormat = "$#,##0.00"
+    
+    'change the tab color
+    With wb.Sheets("Report10").Tab
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = -0.249977111117893
+    End With
+    
+    'kill all gridlines
+    wb.Sheets("Report10").Cells.Select 'select the whole page
+    wb.Sheets("Report10").Range("A458").Activate
+    xlApp.ActiveWindow.DisplayGridlines = False
+    
+    'all coloumns autofit
+    wb.Sheets("Report10").Columns("A:F").EntireColumn.AutoFit
+    
+    'freeze the headers
+    wb.Sheets("Report10").Range("C4").Select
+    xlApp.ActiveWindow.FreezePanes = True
+          
+    Set ws = wb.Sheets("Report10")
+    If YearsStringLength > 31 Then
+        ws.Name = "Yr" & Left(YearNumbers, 10)
+    Else
+        ws.Name = "Yr" & Left(YearNumbers, YearsStringLength - 1)
+    End If
+    xlApp.DisplayAlerts = True
+    '------------------------------------------------
+Stage = 3
+    wb.Save
+    wb.Close
+    xlApp.Quit
+    Set xlApp = Nothing
+
+    '-----------------------------------------------
+    
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    FormatTime = Format((Timer - FormatStart) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and Top 500 Customers Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1) _
+        & " has been generated." _
+        & "Formatting the data cost:" & FormatTime, _
+        vbInformation, "Top 500 Customers Report"
+        
+
+    Write_log 1, "Top 500 Customers in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+
+    End If
+    
+    'note 2 to turn off screen updates
+    'Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    
+Exit Sub
+Dingdong:
+
+'On Error Resume Next
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    
+    If Stage = 2 Then
+    
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    ElseIf Stage = 1 Then
+        
+        If Dir(NewAccessDBFilePath) <> "" Then
+            'appAccess.Quit
+            'Kill NewAccessDBFilePath
+        End If
+    End If
+On Error GoTo Dingdong2
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+    
+Exit Sub
+Dingdong2:
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+
+End Sub
+Sub Report_10_Top500CustomersSelectedYearsAccessDBADO(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+        
+    'note 1 to turn off automatic spreadsheet calculation
+    Application.Calculation = xlCalculationManual
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+    
+    If MsgBox("Are you sure to generate the report of Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "?" & _
+       "  The whole process takes about " & Format((9.5 * countyear) / 86400, "hh:mm:ss") & " minute(s).", vbYesNo, _
+       "Top 500 Customers Report") = vbYes Then
+        MsgBox "Report Generating. Please wait.", vbInformation
+        Worksheets("Report-Builder").Report10.Caption = "Report Generating. Please WAIT."
+        Worksheets("Report-Builder").Report10.Enabled = False
+        Worksheets("Report-Builder").Report10.Locked = True
+        Application.Wait (Now + TimeValue("0:00:03"))
+        
+        HasStarted = True
+    
+        '1st to add timer
+        Dim StartTime As Double
+        Dim MinutesElapsed As String
+        'Remember time when macro starts
+        StartTime = Timer
+        ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+        DisplayCurrentTime
+        DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+        '-----------------------------------------------
+        'Below is to use ACCESS to import source data and do the query
+         
+        Dim FSO As New FileSystemObject
+        Dim FileName1 As String
+        Dim filename2 As String
+        
+        Dim i As Integer
+        
+        Dim NewAccessDBFilePath As String
+        TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+        NewAccessDBFilePath = ThisWorkbook.Path & "\AccessDB.accdb"
+        
+        Dim WorkSpa As Workspace
+        Dim DB As Database
+        Set WorkSpa = DBEngine.Workspaces(0)
+        If Dir(NewAccessDBFilePath) <> "" Then
+         Kill NewAccessDBFilePath
+        End If
+        Set DB = WorkSpa.CreateDatabase(NewAccessDBFilePath, dbLangGeneral)
+        
+Stage = 1
+        
+        DB.Execute "Create table Orders ([CustomerID] text, [SpendingAmount] currency)"
+        DB.Execute "Create table Customers ([CustomerID] text, [CompanyName] text, [Country] text,[City] text)"
+        
+        DB.Close
+    
+        'first to import customers
+        Dim recset As ADODB.Recordset
+        Set recset = New ADODB.Recordset
+        Set recset = fetchRS(NewAccessDBFilePath, "Select CustomerID, CompanyName, Country, City from Customers where 1=0")
+        'fetchRS(FilePath As String, rs As ADODB.Recordset, sql As String) As ADODB.Recordset
+        'recset now is empty
+               
+        Dim recset1 As ADODB.Recordset
+        Set recset1 = New ADODB.Recordset
+        FileName1 = DBFilePath & "\" & "Customers.xlsx"
+        Set recset1 = fetchRS(FileName1, "Select CustomerID, CompanyName, Country, City from Customers", "Excel")
+        Dim n As Byte
+        recset1.MoveFirst
+        Do While Not recset1.EOF
+            recset.AddNew
+            'For n = 0 To recset1.Fields.Count - 1
+                'recset.Fields(recset1.Fields(n).Name).Value = recset1.Fields(n).Value
+            'Next n
+            'recset1.MoveNext
+            
+            recset.Fields("CustomerID") = recset1.Fields(0).Value
+            recset.Fields("CompanyName") = recset1.Fields(1).Value
+            recset.Fields("Country") = recset1.Fields(2).Value
+            recset.Fields("City") = recset1.Fields(3).Value
+            recset1.MoveNext
+        Loop
+    
+        recset.UpdateBatch
+        'the base table of recset will be updated accordingly
+        Dim conn As ADODB.Connection
+        Dim Connect As String
+        Set conn = New ADODB.Connection
+        Connect = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" _
+                    & NewAccessDBFilePath & ";Persist Security Info=False;"
+        conn.Open Connect
+        Set recset = New ADODB.Recordset
+        'recset.CursorLocation = adUseServer
+        recset.CursorType = adOpenKeyset
+        recset.LockType = adLockOptimistic
+        recset.Open "Select CustomerID, SpendingAmount from Orders where 1=0", conn
+        
+        Dim rspartial As ADODB.Recordset
+        Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+        Dim countComma As Byte
+        Dim m As Byte
+        Dim Position As Byte
+        For m = 1 To YearsStringLength
+           If InStr(m, YearNumbers, ",") <> 0 Then
+               Position = InStr(m, YearNumbers, ",")
+               m = Position
+               countComma = countComma + 1
+               YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+               If YearNumber = 2021 Then
+                   Special2021 = 4
+               Else
+                   Special2021 = SplitTotal
+               End If
+               
+               '-------------------------------------------------------------------
+               For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+             
+                   DisplayInfo "Report10.Loading Orders and OrderDetails in Year " & YearNumber & "_" & SplitNumber & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                    
+                   filename2 = GetAddress(YearNumber)
+                    '"C:\...\orders_2001_1.xlsx"
+
+                   Dim ExcelSql As String
+                   ExcelSql = " SELECT customerID," _
+                                & " SUM(IIF(isnull(Unitprice*quantity*(1-discount)),0,(Unitprice*quantity*(1-discount)))) AS SpendAmount" _
+                                & " FROM [orders_" & YearNumber & "_" & SplitNumber & "$] AS o INNER JOIN " _
+                                & " [order_details_" & YearNumber & "_" & SplitNumber & "$] AS od" _
+                                & " ON o.OrderID=od.OrderID" _
+                                & " GROUP BY CustomerID "
+                   Set rspartial = New ADODB.Recordset
+                   Set rspartial = fetchRS(filename2, ExcelSql, "Excel")
+                   '----------------------------------------------------------------------
+                   
+                   rspartial.MoveFirst
+                   Do While Not rspartial.EOF
+                       recset.AddNew
+                       recset.Fields("CustomerID") = rspartial.Fields(0).Value
+                       recset.Fields("SpendingAmount") = rspartial.Fields(1).Value
+                       rspartial.MoveNext
+                       'recset.Update
+                   Loop
+               recset.UpdateBatch
+               Next SplitNumber
+               
+           End If
+        Next m
+        'recset.UpdateBatch
+        conn.Close 'close so that next time wont be a barrier
+        Set conn = Nothing
+        
+        DisplayInfo "Report10-Calculating in Year " & YearNumber & ", " _
+                    & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        
+        Dim sql As String
+        sql = " SELECT Top 500 o.CustomerID, CompanyName, Country, City, sum(SpendingAmount) as SpendAmount" _
+                    & " FROM Orders as o left join Customers as c  " _
+                    & " ON o.CustomerID=c.CustomerID" _
+                    & " Group by o.CustomerID, CompanyName, Country, City" _
+                    & " Order by sum(SpendingAmount) desc"
+        Set recset = New ADODB.Recordset
+        Set recset = fetchRS(NewAccessDBFilePath, sql)
+          
+        DisplayInfo "Report10-Almost Done, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    
+        'Export Report10
+        'create Report within access folder
+        If FSO.FolderExists(ThisWorkbook.Path & "\Report10 Top 500 example") = False Then
+            FSO.CreateFolder (ThisWorkbook.Path & "\Report10 Top 500 example")
+        End If
+        
+        Dim xlApp As Excel.Application
+        Dim wb As Workbook
+        Dim ws As Worksheet
+        
+        Set xlApp = New Excel.Application
+        xlApp.Visible = False
+        
+        TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+        FileName1 = ThisWorkbook.Path & "\Report10 Top 500 example\" & _
+                    "Report 10. Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "_" & _
+                    Format(Now, "YYYYMMDDHHMMSS") & ".xlsx" & _
+                    TimeStamp & ".xlsx"
+        xlApp.Workbooks.Add.SaveAs FileName1
+Stage = 2
+    
+        Set wb = xlApp.Workbooks.Open(FileName1)
+        Set ws = wb.Sheets(1)
+        If YearsStringLength < 31 Then
+            ws.Name = "Yr" & Left(YearNumbers, YearsStringLength - 1)
+        Else
+            ws.Name = "Yr" & Left(YearNumbers, 10)
+        End If
+        ws.Cells(2, 1) = recset.Fields(0).Name
+        ws.Cells(2, 2) = recset.Fields(1).Name
+        ws.Cells(2, 3) = recset.Fields(2).Name
+        ws.Cells(2, 4) = recset.Fields(3).Name
+        ws.Cells(2, 5) = recset.Fields(4).Name
+    
+        ws.Cells(3, 1).CopyFromRecordset recset
+        'MinutesElapsed = Format((Timer - StartTime) / 86400, "HH:MM:SS")
+        Dim FormatTime As String
+        Dim FormatStart As Double
+        FormatStart = Timer
+        
+        ConnX.Close
+        Set ConnX = Nothing
+        If Dir(NewAccessDBFilePath) <> "" Then
+            Kill NewAccessDBFilePath
+        End If
+        '-------------------------------------------
+        'formatting report10
+                 
+        xlApp.DisplayAlerts = False
+        
+        'insert blank boarders
+        wb.Sheets(1).Rows("1:1").Select
+        wb.Sheets(1).Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+        wb.Sheets(1).Columns("A:A").Select
+        wb.Sheets(1).Columns("A:A").Insert shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+        
+        ws.Cells.Select
+        With xlApp.Selection.Font
+            .Name = "Calibri"
+            .Size = 10
+            .Strikethrough = False
+            .Superscript = False
+            .Subscript = False
+            .OutlineFont = False
+            .Shadow = False
+            .Underline = xlUnderlineStyleNone
+            .ColorIndex = xlAutomatic
+            .TintAndShade = 0
+            .ThemeFont = xlThemeFontMinor
+        End With
+        
+        
+        
+        'format the first heading
+        With ws.Range("B2:F2")
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlBottom
+            .WrapText = False
+            .Orientation = 0
+            .AddIndent = False
+            .IndentLevel = 0
+            .ShrinkToFit = False
+            .ReadingOrder = xlContext
+            .MergeCells = False
+        End With
+        ws.Range("B2").FormulaR1C1 = "Top 500 Customers"
+        ws.Range("B2:F2").Merge
+    
+        With ws.Range("B2:F2").Font
+            '.Name = "Calibri"
+            .Size = 16
+            '.Strikethrough = False
+            '.Superscript = False
+            '.Subscript = False
+            '.OutlineFont = False
+            '.Shadow = False
+            '.Underline = xlUnderlineStyleNone
+            '.ColorIndex = xlAutomatic
+            '.TintAndShade = 0
+            '.ThemeFont = xlThemeFontMinor
+        End With
+        
+        'format the second heading
+        With ws.Range("B3:F3").Font
+            .Size = 12
+        End With
+        ws.Range("B3:F3").Font.Bold = True
+        
+        'With xlApp.Selection.Interior
+        With ws.Range("B2:F2").Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.399975585192419
+            .PatternTintAndShade = 0
+        End With
+        
+        ws.Range("B3:F3").Select
+        With xlApp.Selection.Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.599993896298105
+            .PatternTintAndShade = 0
+        End With
+        
+        'add zebra
+        ws.Range("B4:F503").FormatConditions.Add Type:=xlExpression, Formula1:= _
+            "=MOD(ROW(),2)"
+        ws.Range("B4:F503").FormatConditions(ws.Range("B4:F503").FormatConditions.Count).SetFirstPriority
+        With ws.Range("B4:F503").FormatConditions(1).Interior
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.799981688894314
+        End With
+        ws.Range("B4:F503").FormatConditions(1).StopIfTrue = False
+        
+        'add $ sign before the Currency
+        ws.Range("F4:F503").NumberFormat = "$#,##0.00"
+        
+        'change the tab color
+        With ws.Tab
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = -0.249977111117893
+        End With
+        
+        'kill all gridlines
+        ws.Cells.Select 'select the whole page
+        ws.Range("A458").Activate
+        xlApp.ActiveWindow.DisplayGridlines = False
+        
+        'all coloumns autofit
+        ws.Columns("A:F").EntireColumn.AutoFit
+        
+        'freeze the headers
+        ws.Range("C4").Select
+        xlApp.ActiveWindow.FreezePanes = True
+              
+        xlApp.DisplayAlerts = True
+        '------------------------------------------------
+Stage = 3
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        Set xlApp = Nothing
+    
+        '-----------------------------------------------
+        
+        'Determine how many seconds code took to run
+        MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        FormatTime = Format((Timer - FormatStart) / 86400, "hh:mm:ss")
+        DisplayInfo "Report 10 - Completed" & ", " & MinutesElapsed
+        HasStarted = False
+        ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+        
+        'Notify user in seconds
+        MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and Top 500 Customers Report in Year " _
+            & Left(YearNumbers, YearsStringLength - 1) _
+            & " has been generated." _
+            & "Formatting the data cost:" & FormatTime, _
+            vbInformation, "Top 500 Customers Report"
+            
+        Write_log 1, "Top 500 Customers in Year " _
+            & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+    
+        Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+        Worksheets("Report-Builder").Report10.Enabled = True
+        Worksheets("Report-Builder").Report10.Locked = False
+
+    End If
+    
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    
+Exit Sub
+Dingdong:
+On Error GoTo Dingdong2
+
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    On Error Resume Next
+    If Stage = 2 Then
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    ElseIf Stage = 1 Then
+        conn.Close
+        Set conn = Nothing
+    Else
+        ConnX.Close
+        Set ConnX = Nothing
+        
+        If FSO.FileExists(NewAccessDBFilePath) Then
+            FSO.DeleteFile (NewAccessDBFilePath)
+        End If
+        'or below
+        'If Dir(NewAccessDBFilePath) <> "" Then
+            'Kill NewAccessDBFilePath
+        'End If
+    End If
+    
+    On Error GoTo Dingdong2
+    
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+    
+Exit Sub
+Dingdong2:
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+
+End Sub
+Sub Report_10_Top500CustomersSelectedYearsSqlDBUpdateBatch(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+        
+    'note 1 to turn off automatic spreadsheet calculation
+    Application.Calculation = xlCalculationManual
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+    
+    If MsgBox("Are you sure to generate the report of Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "?" & _
+       "  The whole process takes about " & Format((14.3 * countyear) / 86400, "hh:mm:ss") & " minute(s).", vbYesNo, _
+       "Top 500 Customers Report") = vbYes Then
+        MsgBox "Report Generating. Please wait.", vbInformation
+        Worksheets("Report-Builder").Report10.Caption = "Report Generating. Please WAIT."
+        Worksheets("Report-Builder").Report10.Enabled = False
+        Worksheets("Report-Builder").Report10.Locked = True
+        'Application.Wait (Now + TimeValue("0:00:03"))
+        
+        HasStarted = True
+    
+        '1st to add timer
+        Dim StartTime As Double
+        Dim MinutesElapsed As String
+        'Remember time when macro starts
+        StartTime = Timer
+        ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+        DisplayCurrentTime
+        DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+        '-----------------------------------------------
+        'Below is to use ACCESS to import source data and do the query
+         
+        Dim FSO As New FileSystemObject
+        Dim FileName1 As String
+        Dim filename2 As String
+        
+        Dim i As Integer
+        
+Stage = 1
+        
+        'first to import customers
+        
+        'fetchRS(FilePath As String, rs As ADODB.Recordset, sql As String) As ADODB.Recordset
+               
+        Dim conn As ADODB.Connection
+        Dim Connect As String
+        Set conn = New ADODB.Connection
+        Connect = "Provider=SQLOLEDB;SERVER=LAPTOP-AQDG7OJS;Database=exampleDatabase;Trusted_Connection=Yes"
+                    
+        conn.Open Connect
+        
+        'below is for access to delete work table
+        'Dim Catlog As ADOX.Catalog
+        'Set Catlog = New ADOX.Catalog
+        'Dim x As Long
+        'For x = 0 To Catlog.Tables.Count - 1
+             'If Catlog.Tables.Item(x).Type = "TABLE" Then
+             'here Table needs to be UPPER CASE....
+                 'If InStr(1, Catlog.Tables.Item(x).Name, "Orders_t") > 0 Then
+                     
+                     'conn.Execute "Drop Table Orders_t"
+                 'End If
+             'End If
+         'Next x
+         'below for sql is slow, would delete from table instead
+        'Dim SearchSql As String
+        'SearchSql = "select table_name from information_schema.tables"
+        'Dim TableRs As New ADODB.Recordset
+        'TableRs.Open SearchSql, conn, adOpenKeyset, adLockReadOnly
+        
+        'Dim x As Long
+        'TableRs.MoveFirst
+        'For x = 1 To TableRs.RecordCount
+            
+            'If TableRs.Fields(0) = "Orders_t" Then
+                'conn.Execute "Drop Table Orders_t"
+            'End If
+            'If TableRs.Fields(0) = "Customers_t" Then
+                'conn.Execute "Drop Table Customers_t"
+            'End If
+            'TableRs.MoveNext
+       ' Next x
+        
+        'conn.Execute "Create table Orders_t ([CustomerID] varchar(50), [SpendingAmount] money)"
+        'conn.Execute "Create table Customers_t ([CustomerID] varchar(50), [CompanyName] varchar(50), [Country] varchar(50),[City] varchar(50))"
+ 
+        
+        conn.Execute "Delete from Orders_t"
+        conn.Execute "Delete from Customers_t "
+        
+        Dim recset As ADODB.Recordset
+        Set recset = New ADODB.Recordset
+        With recset
+            .CursorLocation = adUseClient
+            .CursorType = adOpenStatic
+            .LockType = adLockBatchOptimistic
+        End With
+        recset.Open "Select CustomerID, CompanyName, Country, City from Customers_t where 1=0", conn
+        'Set recset = fetchRS(, "Select CustomerID, CompanyName, Country, City from Customers_t where 1=0", "Sql")
+        'recset is empty
+        Dim recset1 As ADODB.Recordset
+        Set recset1 = New ADODB.Recordset
+        FileName1 = DBFilePath & "\" & "Customers.xlsx"
+        Set recset1 = fetchRS(FileName1, "Select CustomerID, CompanyName, Country, City from Customers", "Excel")
+        Dim n As Byte
+        recset1.MoveFirst
+        Do While Not recset1.EOF
+            recset.AddNew
+            recset.Fields("CustomerID") = recset1.Fields(0).Value
+            recset.Fields("CompanyName") = recset1.Fields(1).Value
+            recset.Fields("Country") = recset1.Fields(2).Value
+            recset.Fields("City") = recset1.Fields(3).Value
+            recset1.MoveNext
+        Loop
+    
+        recset.UpdateBatch
+        'the base table of recset will be updated accordingly
+        
+        Set recset = Nothing
+        Set recset = New ADODB.Recordset
+        'recset.CursorLocation = adUseServer
+        recset.CursorType = adOpenKeyset
+        recset.LockType = adLockOptimistic
+        recset.Open "Select CustomerID, SpendingAmount from OrderAmount where 1=0", conn
+        'recset is empty again
+        Dim NewAccessDBFilePath As String
+        Dim rspartial As ADODB.Recordset
+        Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+        Dim countComma As Byte
+        Dim m As Byte
+        Dim Position As Byte
+        For m = 1 To YearsStringLength
+           If InStr(m, YearNumbers, ",") <> 0 Then
+               Position = InStr(m, YearNumbers, ",")
+               m = Position
+               countComma = countComma + 1
+               YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+               If YearNumber = 2021 Then
+                   Special2021 = 4
+               Else
+                   Special2021 = SplitTotal
+               End If
+               
+               '-------------------------------------------------------------------
+               For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+             
+                   DisplayInfo "Report10.Loading Orders and OrderDetails in Year " & YearNumber & "_" & SplitNumber & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                    
+                   filename2 = GetAddress(YearNumber)
+                    '"C:\...\orders_2001_1.xlsx"
+
+                   Dim ExcelSql As String
+                   ExcelSql = " SELECT customerID," _
+                                & " SUM(IIF(isnull(Unitprice*quantity*(1-discount)),0,(Unitprice*quantity*(1-discount)))) AS SpendAmount" _
+                                & " FROM [orders_" & YearNumber & "_" & SplitNumber & "$] AS o INNER JOIN " _
+                                & " [order_details_" & YearNumber & "_" & SplitNumber & "$] AS od" _
+                                & " ON o.OrderID=od.OrderID" _
+                                & " GROUP BY CustomerID "
+                   Set rspartial = New ADODB.Recordset
+                   Set rspartial = fetchRS(filename2, ExcelSql, "Excel")
+                   '----------------------------------------------------------------------
+                   
+                   rspartial.MoveFirst
+                   Do While Not rspartial.EOF
+                       recset.AddNew
+                       recset.Fields("CustomerID") = rspartial.Fields(0).Value
+                       recset.Fields("SpendingAmount") = rspartial.Fields(1).Value
+                       rspartial.MoveNext
+                       'recset.Update
+                   Loop
+               recset.UpdateBatch
+               Next SplitNumber
+               'recset.UpdateBatch
+           End If
+        Next m
+        'recset.UpdateBatch
+        conn.Close 'close so that next time wont be a barrier
+        Set conn = Nothing
+        
+        DisplayInfo "Report10-Calculating in Year " & YearNumber & ", " _
+                    & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        
+        Dim sql As String
+        sql = " SELECT Top 500 o.CustomerID, CompanyName, Country, City, sum(SpendingAmount) as SpendAmount" _
+                    & " FROM OrderAmount as o left join Customers_t as c  " _
+                    & " ON o.CustomerID=c.CustomerID" _
+                    & " Group by o.CustomerID, CompanyName, Country, City" _
+                    & " Order by sum(SpendingAmount) desc"
+        Set recset = New ADODB.Recordset
+        Set recset = fetchRS(, sql, "Sql")
+          
+        DisplayInfo "Report10-Almost Done, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    
+        'Export Report10
+        'create Report within access folder
+        If FSO.FolderExists(ThisWorkbook.Path & "\Report10 Top 500 example") = False Then
+            FSO.CreateFolder (ThisWorkbook.Path & "\Report10 Top 500 example")
+        End If
+        
+        Dim xlApp As Excel.Application
+        Dim wb As Workbook
+        Dim ws As Worksheet
+        
+        Set xlApp = New Excel.Application
+        xlApp.Visible = False
+        
+        TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+        FileName1 = ThisWorkbook.Path & "\Report10 Top 500 example\" & _
+                    "Report 10. Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "_" & _
+                    TimeStamp & ".xlsx"
+        xlApp.Workbooks.Add.SaveAs FileName1
+Stage = 2
+    
+        Set wb = xlApp.Workbooks.Open(FileName1)
+        Set ws = wb.Sheets(1)
+        If YearsStringLength < 31 Then
+            ws.Name = "Yr" & Left(YearNumbers, YearsStringLength - 1)
+        Else
+            ws.Name = "Yr" & Left(YearNumbers, 10)
+        End If
+        ws.Cells(2, 1) = recset.Fields(0).Name
+        ws.Cells(2, 2) = recset.Fields(1).Name
+        ws.Cells(2, 3) = recset.Fields(2).Name
+        ws.Cells(2, 4) = recset.Fields(3).Name
+        ws.Cells(2, 5) = recset.Fields(4).Name
+    
+        ws.Cells(3, 1).CopyFromRecordset recset
+        'MinutesElapsed = Format((Timer - StartTime) / 86400, "HH:MM:SS")
+        Dim FormatTime As String
+        Dim FormatStart As Double
+        FormatStart = Timer
+        
+        ConnX.Close
+        Set ConnX = Nothing
+ 
+        '-------------------------------------------
+        'formatting report10
+                 
+        xlApp.DisplayAlerts = False
+        
+        'insert blank boarders
+        wb.Sheets(1).Rows("1:1").Select
+        wb.Sheets(1).Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+        wb.Sheets(1).Columns("A:A").Select
+        wb.Sheets(1).Columns("A:A").Insert shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+        
+        ws.Cells.Select
+        With xlApp.Selection.Font
+            .Name = "Calibri"
+            .Size = 10
+            .Strikethrough = False
+            .Superscript = False
+            .Subscript = False
+            .OutlineFont = False
+            .Shadow = False
+            .Underline = xlUnderlineStyleNone
+            .ColorIndex = xlAutomatic
+            .TintAndShade = 0
+            .ThemeFont = xlThemeFontMinor
+        End With
+        
+        
+        
+        'format the first heading
+        With ws.Range("B2:F2")
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlBottom
+            .WrapText = False
+            .Orientation = 0
+            .AddIndent = False
+            .IndentLevel = 0
+            .ShrinkToFit = False
+            .ReadingOrder = xlContext
+            .MergeCells = False
+        End With
+        ws.Range("B2").FormulaR1C1 = "Top 500 Customers"
+        ws.Range("B2:F2").Merge
+    
+        With ws.Range("B2:F2").Font
+            '.Name = "Calibri"
+            .Size = 16
+            '.Strikethrough = False
+            '.Superscript = False
+            '.Subscript = False
+            '.OutlineFont = False
+            '.Shadow = False
+            '.Underline = xlUnderlineStyleNone
+            '.ColorIndex = xlAutomatic
+            '.TintAndShade = 0
+            '.ThemeFont = xlThemeFontMinor
+        End With
+        
+        'format the second heading
+        With ws.Range("B3:F3").Font
+            .Size = 12
+        End With
+        ws.Range("B3:F3").Font.Bold = True
+        
+        'With xlApp.Selection.Interior
+        With ws.Range("B2:F2").Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.399975585192419
+            .PatternTintAndShade = 0
+        End With
+        
+        ws.Range("B3:F3").Select
+        With xlApp.Selection.Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.599993896298105
+            .PatternTintAndShade = 0
+        End With
+        
+        'add zebra
+        ws.Range("B4:F503").FormatConditions.Add Type:=xlExpression, Formula1:= _
+            "=MOD(ROW(),2)"
+        ws.Range("B4:F503").FormatConditions(ws.Range("B4:F503").FormatConditions.Count).SetFirstPriority
+        With ws.Range("B4:F503").FormatConditions(1).Interior
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.799981688894314
+        End With
+        ws.Range("B4:F503").FormatConditions(1).StopIfTrue = False
+        
+        'add $ sign before the Currency
+        ws.Range("F4:F503").NumberFormat = "$#,##0.00"
+        
+        'change the tab color
+        With ws.Tab
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = -0.249977111117893
+        End With
+        
+        'kill all gridlines
+        ws.Cells.Select 'select the whole page
+        ws.Range("A458").Activate
+        xlApp.ActiveWindow.DisplayGridlines = False
+        
+        'all coloumns autofit
+        ws.Columns("A:F").EntireColumn.AutoFit
+        
+        'freeze the headers
+        ws.Range("C4").Select
+        xlApp.ActiveWindow.FreezePanes = True
+              
+        xlApp.DisplayAlerts = True
+        '------------------------------------------------
+Stage = 3
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        Set xlApp = Nothing
+    
+        '-----------------------------------------------
+        
+        'Determine how many seconds code took to run
+        MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        FormatTime = Format((Timer - FormatStart) / 86400, "hh:mm:ss")
+        DisplayInfo "Report 10 - Completed" & ", " & MinutesElapsed
+        HasStarted = False
+        ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+        
+        'Notify user in seconds
+        MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and Top 500 Customers Report in Year " _
+            & Left(YearNumbers, YearsStringLength - 1) _
+            & " has been generated." _
+            & "Formatting the data cost:" & FormatTime, _
+            vbInformation, "Top 500 Customers Report"
+            
+        Write_log 1, "Top 500 Customers in Year " _
+            & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+    
+        Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+        Worksheets("Report-Builder").Report10.Enabled = True
+        Worksheets("Report-Builder").Report10.Locked = False
+
+    End If
+    
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    
+Exit Sub
+Dingdong:
+On Error GoTo Dingdong2
+
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    On Error Resume Next
+    If Stage = 2 Then
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    ElseIf Stage = 1 Then
+        conn.Close
+        Set conn = Nothing
+    Else
+        ConnX.Close
+        Set ConnX = Nothing
+        
+        If FSO.FileExists(NewAccessDBFilePath) Then
+            FSO.DeleteFile (NewAccessDBFilePath)
+        End If
+        'or below
+        'If Dir(NewAccessDBFilePath) <> "" Then
+            'Kill NewAccessDBFilePath
+        'End If
+    End If
+    
+    On Error GoTo Dingdong2
+    
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+    
+Exit Sub
+Dingdong2:
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+
+End Sub
+Sub Report_10_Top500CustomersSelectedYearsBulkInsert(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+        
+    'note 1 to turn off automatic spreadsheet calculation
+    Application.Calculation = xlCalculationManual
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+    
+    If MsgBox("Are you sure to generate the report of Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "?" & _
+       "  The whole process takes about " & Format((14.3 * countyear) / 86400, "hh:mm:ss") & " minute(s).", vbYesNo, _
+       "Top 500 Customers Report") = vbYes Then
+        MsgBox "Report Generating. Please wait.", vbInformation
+        Worksheets("Report-Builder").Report10.Caption = "Report Generating. Please WAIT."
+        Worksheets("Report-Builder").Report10.Enabled = False
+        Worksheets("Report-Builder").Report10.Locked = True
+        'Application.Wait (Now + TimeValue("0:00:03"))
+        
+        HasStarted = True
+    
+        '1st to add timer
+        Dim StartTime As Double
+        Dim MinutesElapsed As String
+        'Remember time when macro starts
+        StartTime = Timer
+        ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+        DisplayCurrentTime
+        DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+        '-----------------------------------------------
+        'Below is to use ACCESS to import source data and do the query
+         
+        Dim FSO As New FileSystemObject
+        Dim FileName1 As String
+        Dim filename2 As String
+        Dim filename3 As String
+        Dim i As Integer
+        
+Stage = 1
+        
+        'first to import customers
+        
+        'fetchRS(FilePath As String, rs As ADODB.Recordset, sql As String) As ADODB.Recordset
+                      
+        Dim xlApp As Excel.Application
+        Dim wb As Workbook
+        Dim ws As Worksheet
+        Set xlApp = New Excel.Application
+        xlApp.Visible = False
+        FileName1 = DBFilePath & "\" & "Customers.xlsx"
+        'filename3 = ThisWorkbook.Path & "\" & "Customers_t.csv"
+        filename3 = ThisWorkbook.Path & "\" & "Customers_t.txt"
+        If FSO.FileExists(filename3) Then
+            FSO.DeleteFile (filename3)
+        End If
+        Set wb = xlApp.Workbooks.Open(FileName1)
+        
+        'wb.SaveAs filename3, xlCSVUTF8
+        wb.SaveAs filename3, 20
+        wb.Close
+        
+        Dim conn As ADODB.Connection
+        Dim Connect As String
+        Set conn = New ADODB.Connection
+        Connect = "Provider=SQLOLEDB;SERVER=LAPTOP-AQDG7OJS;Database=exampleDatabase;Trusted_Connection=Yes"
+                    
+        conn.Open Connect
+        conn.Execute "Delete from Orders_t"
+        conn.Execute "Delete from OrderDetails_t"
+        conn.Execute "Delete from Customers_t "
+        
+        Dim BulkSql As String
+        BulkSql = " bulk insert Customers_t from '" & filename3 & "'" & _
+                " WITH (FIRSTROW = 2," & _
+                " FIELDTERMINATOR = '\t'," & _
+                " ROWTERMINATOR='\n' ) "
+        conn.Execute BulkSql
+        
+        If FSO.FileExists(filename3) Then
+            FSO.DeleteFile filename3
+        End If
+        'below to use openrowset
+        Dim recset As ADODB.Recordset
+        Set recset = New ADODB.Recordset
+        With recset
+            .CursorLocation = adUseClient
+            .CursorType = adOpenStatic
+            .LockType = adLockBatchOptimistic
+        End With
+        Dim ExcelSql As String
+        Dim NewAccessDBFilePath As String
+        Dim rspartial As ADODB.Recordset
+        
+        Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+        Dim countComma As Byte
+        Dim m As Byte
+        Dim Position As Byte
+        For m = 1 To YearsStringLength
+           If InStr(m, YearNumbers, ",") <> 0 Then
+               Position = InStr(m, YearNumbers, ",")
+               m = Position
+               countComma = countComma + 1
+               YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+               If YearNumber = 2021 Then
+                   Special2021 = 4
+               Else
+                   Special2021 = SplitTotal
+               End If
+               
+               '-------------------------------------------------------------------
+               For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+             
+                   DisplayInfo "Report10.Loading Orders and OrderDetails in Year " & YearNumber & "_" & SplitNumber & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                    
+                   filename2 = GetAddress(YearNumber)
+                    '"C:\...\orders_2001_1.xlsx"
+                '----------------------------------------------------------------------
+                   'below openrowset is too slow
+                   'ExcelSql = "Insert INTO Orders_tt " & _
+                               " Select * FROM OPENROWSET('Microsoft.ACE.OLEDB.12.0', " & _
+                               " 'Excel 12.0 xml;HDR=YES;Database=" & filename2 & "'," & _
+                               " 'SELECT OrderID, CustomerID  FROM  [Orders_" & YearNumber & "_" & SplitNumber & "$] '  )"
+                               
+                   'conn.Execute ExcelSql
+                   'ExcelSql = "Insert INTO OrderDetails_tt " & _
+                               " Select * FROM OPENROWSET('Microsoft.ACE.OLEDB.12.0', " & _
+                               " 'Excel 12.0 xml;HDR=YES;Database=" & filename2 & "'," & _
+                               " 'SELECT OrderID, UnitPrice, Quantity, Discount  FROM  [Order_Details_" & YearNumber & "_" & SplitNumber & "$] '  )"
+                   'conn.Execute ExcelSql
+
+                   '----------------------------------------------------------------------
+                    Set wb = xlApp.Workbooks.Open(filename2)
+                    
+                    filename3 = ThisWorkbook.Path & "\" & GetFileName(YearNumber, SplitNumber, "O") & ".txt"
+                    If FSO.FileExists(filename3) Then
+                        FSO.DeleteFile (filename3)
+                    End If
+                    Set ws = wb.Sheets(1)
+                    ws.SaveAs filename3, 20
+                    
+                    
+                    FileName1 = Replace(filename3, "orders_", "orderDetails_")
+                    Set ws = wb.Sheets(2)
+                    If FSO.FileExists(FileName1) Then
+                        FSO.DeleteFile (FileName1)
+                    End If
+                    ws.SaveAs FileName1, 20
+                    wb.Close
+                    
+                    BulkSql = " bulk insert Orders_t from '" & filename3 & "'" & _
+                            " WITH (FIRSTROW = 2," & _
+                            " FIELDTERMINATOR = '\t'," & _
+                            " ROWTERMINATOR='\n' ) "
+                    conn.Execute BulkSql
+                    
+                    BulkSql = " bulk insert OrderDetails_t from '" & FileName1 & "'" & _
+                            " WITH (FIRSTROW = 2," & _
+                            " FIELDTERMINATOR = '\t'," & _
+                            " ROWTERMINATOR='\n' ) "
+                    conn.Execute BulkSql
+               Next SplitNumber
+               
+           End If
+        Next m
+        'wb.Close
+        Set wb = Nothing
+        xlApp.Quit
+        DisplayInfo "Report10-Calculating in Year " & YearNumber & ", " _
+                    & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        
+        Dim sql As String
+        sql = " SELECT t.CustomerID, CompanyName, Country, City,  SpendAmount from (" _
+                    & " Select Top 500 o.CustomerID, Sum(isnull(UnitPrice*Quantity*(1-Discount),0)) as SpendAmount" _
+                    & " FROM Orders_t as o left join OrderDetails_t as od  " _
+                    & " ON o.OrderID=od.OrderID" _
+                    & " Group by o.CustomerID " _
+                    & " Order by 2 desc" _
+                    & " ) as t inner join Customers_t as c" _
+                    & " on t.CustomerID=c.CustomerID Order by 5 desc"
+        Set recset = New ADODB.Recordset
+        recset.Open sql, conn
+          
+        DisplayInfo "Report10-Almost Done, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    
+        'Export Report10
+        'create Report within access folder
+        If FSO.FolderExists(ThisWorkbook.Path & "\Report10 Top 500 example") = False Then
+            FSO.CreateFolder (ThisWorkbook.Path & "\Report10 Top 500 example")
+        End If
+        
+        Set xlApp = New Excel.Application
+        xlApp.Visible = False
+        
+        TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+        FileName1 = ThisWorkbook.Path & "\Report10 Top 500 example\" & _
+                    "Report 10. Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "_" & _
+                    TimeStamp & ".xlsx"
+        xlApp.Workbooks.Add.SaveAs FileName1
+Stage = 2
+    
+        Set wb = xlApp.Workbooks.Open(FileName1)
+        Set ws = wb.Sheets(1)
+        If YearsStringLength < 31 Then
+            ws.Name = "Yr" & Left(YearNumbers, YearsStringLength - 1)
+        Else
+            ws.Name = "Yr" & Left(YearNumbers, 10)
+        End If
+        ws.Cells(2, 1) = recset.Fields(0).Name
+        ws.Cells(2, 2) = recset.Fields(1).Name
+        ws.Cells(2, 3) = recset.Fields(2).Name
+        ws.Cells(2, 4) = recset.Fields(3).Name
+        ws.Cells(2, 5) = recset.Fields(4).Name
+    
+        ws.Cells(3, 1).CopyFromRecordset recset
+        
+        conn.Execute "Delete from Orders_t"
+        conn.Execute "Delete from OrderDetails_t"
+        conn.Execute "Delete from Customers_t "
+        'MinutesElapsed = Format((Timer - StartTime) / 86400, "HH:MM:SS")
+        Dim FormatTime As String
+        Dim FormatStart As Double
+        FormatStart = Timer
+        
+        conn.Close
+        Set conn = Nothing
+ 
+        '-------------------------------------------
+        'formatting report10
+                 
+        xlApp.DisplayAlerts = False
+        
+        'insert blank boarders
+        wb.Sheets(1).Rows("1:1").Select
+        wb.Sheets(1).Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+        wb.Sheets(1).Columns("A:A").Select
+        wb.Sheets(1).Columns("A:A").Insert shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+        
+        ws.Cells.Select
+        With xlApp.Selection.Font
+            .Name = "Calibri"
+            .Size = 10
+            .Strikethrough = False
+            .Superscript = False
+            .Subscript = False
+            .OutlineFont = False
+            .Shadow = False
+            .Underline = xlUnderlineStyleNone
+            .ColorIndex = xlAutomatic
+            .TintAndShade = 0
+            .ThemeFont = xlThemeFontMinor
+        End With
+        
+        
+        
+        'format the first heading
+        With ws.Range("B2:F2")
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlBottom
+            .WrapText = False
+            .Orientation = 0
+            .AddIndent = False
+            .IndentLevel = 0
+            .ShrinkToFit = False
+            .ReadingOrder = xlContext
+            .MergeCells = False
+        End With
+        ws.Range("B2").FormulaR1C1 = "Top 500 Customers"
+        ws.Range("B2:F2").Merge
+    
+        With ws.Range("B2:F2").Font
+            '.Name = "Calibri"
+            .Size = 16
+            '.Strikethrough = False
+            '.Superscript = False
+            '.Subscript = False
+            '.OutlineFont = False
+            '.Shadow = False
+            '.Underline = xlUnderlineStyleNone
+            '.ColorIndex = xlAutomatic
+            '.TintAndShade = 0
+            '.ThemeFont = xlThemeFontMinor
+        End With
+        
+        'format the second heading
+        With ws.Range("B3:F3").Font
+            .Size = 12
+        End With
+        ws.Range("B3:F3").Font.Bold = True
+        
+        'With xlApp.Selection.Interior
+        With ws.Range("B2:F2").Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.399975585192419
+            .PatternTintAndShade = 0
+        End With
+        
+        ws.Range("B3:F3").Select
+        With xlApp.Selection.Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.599993896298105
+            .PatternTintAndShade = 0
+        End With
+        
+        'add zebra
+        ws.Range("B4:F503").FormatConditions.Add Type:=xlExpression, Formula1:= _
+            "=MOD(ROW(),2)"
+        ws.Range("B4:F503").FormatConditions(ws.Range("B4:F503").FormatConditions.Count).SetFirstPriority
+        With ws.Range("B4:F503").FormatConditions(1).Interior
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.799981688894314
+        End With
+        ws.Range("B4:F503").FormatConditions(1).StopIfTrue = False
+        
+        'add $ sign before the Currency
+        ws.Range("F4:F503").NumberFormat = "$#,##0.00"
+        
+        'change the tab color
+        With ws.Tab
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = -0.249977111117893
+        End With
+        
+        'kill all gridlines
+        ws.Cells.Select 'select the whole page
+        ws.Range("A458").Activate
+        xlApp.ActiveWindow.DisplayGridlines = False
+        
+        'all coloumns autofit
+        ws.Columns("A:F").EntireColumn.AutoFit
+        
+        'freeze the headers
+        ws.Range("C4").Select
+        xlApp.ActiveWindow.FreezePanes = True
+              
+        xlApp.DisplayAlerts = True
+        '------------------------------------------------
+Stage = 3
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        Set xlApp = Nothing
+    
+        '-----------------------------------------------
+        
+        'Determine how many seconds code took to run
+        MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        FormatTime = Format((Timer - FormatStart) / 86400, "hh:mm:ss")
+        DisplayInfo "Report 10 - Completed" & ", " & MinutesElapsed
+        HasStarted = False
+        ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+        
+        'Notify user in seconds
+        MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and Top 500 Customers Report in Year " _
+            & Left(YearNumbers, YearsStringLength - 1) _
+            & " has been generated." _
+            & "Formatting the data cost:" & FormatTime, _
+            vbInformation, "Top 500 Customers Report"
+            
+        Write_log 1, "Top 500 Customers in Year " _
+            & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+    
+        Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+        Worksheets("Report-Builder").Report10.Enabled = True
+        Worksheets("Report-Builder").Report10.Locked = False
+
+    End If
+    
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    
+Exit Sub
+Dingdong:
+On Error GoTo Dingdong2
+
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    On Error Resume Next
+    If Stage = 2 Then
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    ElseIf Stage = 1 Then
+        conn.Close
+        Set conn = Nothing
+    Else
+        ConnX.Close
+        Set ConnX = Nothing
+        
+        If FSO.FileExists(NewAccessDBFilePath) Then
+            FSO.DeleteFile (NewAccessDBFilePath)
+        End If
+        'or below
+        'If Dir(NewAccessDBFilePath) <> "" Then
+            'Kill NewAccessDBFilePath
+        'End If
+    End If
+    
+    On Error GoTo Dingdong2
+    
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+    
+Exit Sub
+Dingdong2:
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+
+End Sub
+Sub Report_10_Top500CustomersSelectedYearsSSIS(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+        
+    'note 1 to turn off automatic spreadsheet calculation
+    Application.Calculation = xlCalculationManual
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = False
+    
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+    
+    If MsgBox("Are you sure to generate the report of Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "?" & _
+       "  The whole process takes about " & Format((21.5 * countyear) / 86400, "hh:mm:ss") & " minute(s).", vbYesNo, _
+       "Top 500 Customers Report") = vbYes Then
+        MsgBox "Report Generating. Please wait.", vbInformation
+        Worksheets("Report-Builder").Report10.Caption = "Report Generating. Please WAIT."
+        Worksheets("Report-Builder").Report10.Enabled = False
+        Worksheets("Report-Builder").Report10.Locked = True
+        'Application.Wait (Now + TimeValue("0:00:03"))
+        
+        HasStarted = True
+    
+        '1st to add timer
+        Dim StartTime As Double
+        Dim MinutesElapsed As String
+        'Remember time when macro starts
+        StartTime = Timer
+        ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+        DisplayCurrentTime
+        DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+        '-----------------------------------------------
+        'Below is to use ACCESS to import source data and do the query
+         
+        Dim FSO As New FileSystemObject
+        Dim FileName1 As String
+        Dim filename2 As String
+        Dim filename3 As String
+        Dim i As Integer
+        
+Stage = 1
+        
+        'first to import customers
+        
+        'fetchRS(FilePath As String, rs As ADODB.Recordset, sql As String) As ADODB.Recordset
+                      
+        Dim xlApp As Excel.Application
+        Dim wb As Workbook
+        Dim ws As Worksheet
+        Set xlApp = New Excel.Application
+        xlApp.Visible = False
+        FileName1 = DBFilePath & "\" & "Customers.xlsx"
+        filename3 = ThisWorkbook.Path & "\SSIS"
+        If FSO.FolderExists(filename3) = False Then
+            FSO.CreateFolder (filename3)
+        End If
+        filename3 = ThisWorkbook.Path & "\SSIS\" & "Customers_t.txt"
+        
+        If FSO.FileExists(filename3) Then
+            FSO.DeleteFile (filename3)
+        End If
+        Set wb = xlApp.Workbooks.Open(FileName1)
+        
+        wb.SaveAs filename3, 20
+        wb.Close
+        
+        Dim recset As ADODB.Recordset
+        Dim conn As ADODB.Connection
+        Dim Connect As String
+        Set conn = New ADODB.Connection
+        Connect = "Provider=SQLOLEDB;SERVER=LAPTOP-AQDG7OJS;Database=exampleDatabase;Trusted_Connection=Yes"
+                    
+        conn.Open Connect
+        conn.Execute "Delete from Customers_t "
+        
+        Dim BulkSql As String
+        BulkSql = " bulk insert Customers_t from '" & filename3 & "'" & _
+                " WITH (FIRSTROW = 2," & _
+                " FIELDTERMINATOR = '\t'," & _
+                " ROWTERMINATOR='\n' ) "
+        conn.Execute BulkSql
+        'below to use SSIS
+        
+        Dim SSISFolder As String
+        SSISFolder = ThisWorkbook.Path & "\SSIS"
+        If FSO.FolderExists(SSISFolder) = False Then
+            FSO.CreateFolder (SSISFolder)
+        End If
+             
+        Dim firstImport As Byte
+        firstImport = 0
+        Dim sql As String
+        Dim CommandStr As String
+        Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+        Dim countComma As Byte
+        Dim m As Byte
+        Dim Position As Byte
+        For m = 1 To YearsStringLength
+           If InStr(m, YearNumbers, ",") <> 0 Then
+               Position = InStr(m, YearNumbers, ",")
+               m = Position
+               countComma = countComma + 1
+               YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+               If YearNumber = 2021 Then
+                   Special2021 = 4
+               Else
+                   Special2021 = SplitTotal
+               End If
+               
+               '-------------------------------------------------------------------
+               For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+             
+                   DisplayInfo "Report10.Loading Orders and OrderDetails in Year " & YearNumber & "_" & SplitNumber & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                    
+                   filename2 = GetAddress(YearNumber)
+                    '"C:\...\orders_2001_1.xlsx"
+
+                   '----------------------------------------------------------------------
+                    Set wb = xlApp.Workbooks.Open(filename2)
+                    Set ws = wb.Sheets(1)
+                    'ws.Name = "Orders"
+                    filename3 = SSISFolder & "\Orders.txt"
+                    If FSO.FileExists(filename3) Then
+                        FSO.DeleteFile (filename3)
+                    End If
+                    'ws.Copy Before:=ws
+                    xlApp.DisplayAlerts = False
+                    ws.SaveAs filename3, 20
+                    'wb.Close
+                    'xlApp.DisplayAlerts = True
+                    'Set wb = Nothing
+                    
+                    'Set wb = xlApp.Workbooks.Open(filename2)
+                    Set ws = wb.Sheets(2)
+                    'ws.Name = "OrderDetails"
+                    filename2 = SSISFolder & "\OrderDetails.txt"
+                    If FSO.FileExists(filename2) Then
+                        FSO.DeleteFile (filename2)
+                    End If
+                    'ws.Copy Before:=ws
+                    'xlApp.DisplayAlerts = False
+                    ws.SaveAs filename3, 20
+                    wb.Close
+                    xlApp.DisplayAlerts = True
+                    Set wb = Nothing
+                    xlApp.Quit
+                    'to use ssis
+                    
+                    If countComma = 1 And SplitNumber = 1 Then
+                        
+                        conn.Execute "delete from Orders_tt"
+                
+                        conn.Execute "delete from OrderDetails_tt"
+                  
+                  
+                    End If
+                    'CommandStr = "dtexec /f """ & SSISFolder & "\ImportFromExcelOrders.dtsx"""
+                    CommandStr = "dtexec /f ""C:\Users\Administrator\Desktop\SSIS\ImportFromExcelOrders.dtsx"""
+                    'Call Shell(CommandStr, 0)
+                    
+                     'CommandStr = "C:\Program Files\Microsoft SQL Server\150\DTS\Binn\DTEXEC.exe /f ""C:\Users\Administrator\Desktop\ImportFromExcelOrders.dtsx"""
+
+                    Call Shell(CommandStr, 0)
+                    CommandStr = "dtexec /f ""C:\Users\Administrator\Desktop\SSIS\ImportFromExcelOrderDetails.dtsx"""
+                    Call Shell(CommandStr, 0)
+                    If FSO.FileExists(filename2) Then
+                        FSO.DeleteFile (filename2)
+                    End If
+                    If FSO.FileExists(filename3) Then
+                        FSO.DeleteFile (filename3)
+                    End If
+               Next SplitNumber
+                           
+           End If
+        Next m
+        'wb.Close
+        Set wb = Nothing
+        xlApp.Quit
+        DisplayInfo "Report10-Calculating in Year " & YearNumber & ", " _
+                    & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                    
+        sql = " SELECT  t.CustomerID, CompanyName, Country, City,  SpendAmount from (" _
+                            & " Select Top 500 CustomerID, Sum(isnull(UnitPrice*Quantity*(1-Discount),0)) as SpendAmount" _
+                            & " FROM Orders_tt as o left join OrderDetails_tt as od  " _
+                            & " ON o.OrderID=od.OrderID" _
+                            & " Group by CustomerID " _
+                            & " Order by 2 desc " _
+                    & " ) as t inner join Customers_t as c" _
+                    & " on t.CustomerID=c.CustomerID Order by SpendAmount Desc"
+                    
+       
+        Set recset = New ADODB.Recordset
+        With recset
+            '.CursorLocation = adUseClient
+            .CursorType = adOpenForwardOnly
+            .LockType = adLockBatchOptimistic
+        End With
+        recset.Open sql, conn
+          
+        DisplayInfo "Report10-Almost Done, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    
+        'Export Report10
+        'create Report within access folder
+        If FSO.FolderExists(ThisWorkbook.Path & "\Report10 Top 500 example") = False Then
+            FSO.CreateFolder (ThisWorkbook.Path & "\Report10 Top 500 example")
+        End If
+        
+        Set xlApp = New Excel.Application
+        xlApp.Visible = False
+        
+        TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+        FileName1 = ThisWorkbook.Path & "\Report10 Top 500 example\" & _
+                    "Report 10. Top 500 Customers in Year " & Left(YearNumbers, YearsStringLength - 1) & "_" & _
+                    TimeStamp & ".xlsx"
+        xlApp.Workbooks.Add.SaveAs FileName1
+Stage = 2
+    
+        Set wb = xlApp.Workbooks.Open(FileName1)
+        Set ws = wb.Sheets(1)
+        If YearsStringLength < 31 Then
+            ws.Name = "Yr" & Left(YearNumbers, YearsStringLength - 1)
+        Else
+            ws.Name = "Yr" & Left(YearNumbers, 10)
+        End If
+        ws.Cells(2, 1) = recset.Fields(0).Name
+        ws.Cells(2, 2) = recset.Fields(1).Name
+        ws.Cells(2, 3) = recset.Fields(2).Name
+        ws.Cells(2, 4) = recset.Fields(3).Name
+        ws.Cells(2, 5) = recset.Fields(4).Name
+    
+        ws.Cells(3, 1).CopyFromRecordset recset
+        'MinutesElapsed = Format((Timer - StartTime) / 86400, "HH:MM:SS")
+        Dim FormatTime As String
+        Dim FormatStart As Double
+        FormatStart = Timer
+        
+        conn.Close
+        Set conn = Nothing
+ 
+        '-------------------------------------------
+        'formatting report10
+                 
+        xlApp.DisplayAlerts = False
+        
+        'insert blank boarders
+        wb.Sheets(1).Rows("1:1").Select
+        wb.Sheets(1).Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+        wb.Sheets(1).Columns("A:A").Select
+        wb.Sheets(1).Columns("A:A").Insert shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+        
+        ws.Cells.Select
+        With xlApp.Selection.Font
+            .Name = "Calibri"
+            .Size = 10
+            .Strikethrough = False
+            .Superscript = False
+            .Subscript = False
+            .OutlineFont = False
+            .Shadow = False
+            .Underline = xlUnderlineStyleNone
+            .ColorIndex = xlAutomatic
+            .TintAndShade = 0
+            .ThemeFont = xlThemeFontMinor
+        End With
+        
+        
+        
+        'format the first heading
+        With ws.Range("B2:F2")
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlBottom
+            .WrapText = False
+            .Orientation = 0
+            .AddIndent = False
+            .IndentLevel = 0
+            .ShrinkToFit = False
+            .ReadingOrder = xlContext
+            .MergeCells = False
+        End With
+        ws.Range("B2").FormulaR1C1 = "Top 500 Customers"
+        ws.Range("B2:F2").Merge
+    
+        With ws.Range("B2:F2").Font
+            '.Name = "Calibri"
+            .Size = 16
+            '.Strikethrough = False
+            '.Superscript = False
+            '.Subscript = False
+            '.OutlineFont = False
+            '.Shadow = False
+            '.Underline = xlUnderlineStyleNone
+            '.ColorIndex = xlAutomatic
+            '.TintAndShade = 0
+            '.ThemeFont = xlThemeFontMinor
+        End With
+        
+        'format the second heading
+        With ws.Range("B3:F3").Font
+            .Size = 12
+        End With
+        ws.Range("B3:F3").Font.Bold = True
+        
+        'With xlApp.Selection.Interior
+        With ws.Range("B2:F2").Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.399975585192419
+            .PatternTintAndShade = 0
+        End With
+        
+        ws.Range("B3:F3").Select
+        With xlApp.Selection.Interior
+            .Pattern = xlSolid
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.599993896298105
+            .PatternTintAndShade = 0
+        End With
+        
+        'add zebra
+        ws.Range("B4:F503").FormatConditions.Add Type:=xlExpression, Formula1:= _
+            "=MOD(ROW(),2)"
+        ws.Range("B4:F503").FormatConditions(ws.Range("B4:F503").FormatConditions.Count).SetFirstPriority
+        With ws.Range("B4:F503").FormatConditions(1).Interior
+            .PatternColorIndex = xlAutomatic
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = 0.799981688894314
+        End With
+        ws.Range("B4:F503").FormatConditions(1).StopIfTrue = False
+        
+        'add $ sign before the Currency
+        ws.Range("F4:F503").NumberFormat = "$#,##0.00"
+        
+        'change the tab color
+        With ws.Tab
+            .ThemeColor = xlThemeColorAccent5
+            .TintAndShade = -0.249977111117893
+        End With
+        
+        'kill all gridlines
+        ws.Cells.Select 'select the whole page
+        ws.Range("A458").Activate
+        xlApp.ActiveWindow.DisplayGridlines = False
+        
+        'all coloumns autofit
+        ws.Columns("A:F").EntireColumn.AutoFit
+        
+        'freeze the headers
+        ws.Range("C4").Select
+        xlApp.ActiveWindow.FreezePanes = True
+              
+        xlApp.DisplayAlerts = True
+        '------------------------------------------------
+Stage = 3
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        Set xlApp = Nothing
+    
+        '-----------------------------------------------
+        
+        'Determine how many seconds code took to run
+        MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+        FormatTime = Format((Timer - FormatStart) / 86400, "hh:mm:ss")
+        DisplayInfo "Report 10 - Completed" & ", " & MinutesElapsed
+        HasStarted = False
+        ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+        
+        'Notify user in seconds
+        MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and Top 500 Customers Report in Year " _
+            & Left(YearNumbers, YearsStringLength - 1) _
+            & " has been generated." _
+            & "Formatting the data cost:" & FormatTime, _
+            vbInformation, "Top 500 Customers Report"
+            
+        Write_log 1, "Top 500 Customers in Year " _
+            & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+    
+        Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+        Worksheets("Report-Builder").Report10.Enabled = True
+        Worksheets("Report-Builder").Report10.Locked = False
+
+    End If
+    
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    
+Exit Sub
+Dingdong:
+On Error GoTo Dingdong2
+
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    On Error Resume Next
+    If Stage = 2 Then
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    ElseIf Stage = 1 Then
+        conn.Close
+        Set conn = Nothing
+        
+
+        'or below
+        'If Dir(NewAccessDBFilePath) <> "" Then
+            'Kill NewAccessDBFilePath
+        'End If
+    End If
+    
+    On Error GoTo Dingdong2
+    
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+    
+Exit Sub
+Dingdong2:
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report in Year " _
+        & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+
+End Sub
+Sub Report_10_Top500Customers()
+
+On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+
+    'note 1 to turn off automatic spreadsheet calculation
+    Application.Calculation = xlCalculationManual
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = False
+
+    If MsgBox("Are you sure to generate the report of Top 500 Customers in 21 Years " & "?" & _
+          "  The whole process takes about 10 minute(s). If you wish to see Top 500 " & _
+          "Customers in Selected Years, please go to button ""Run the Report"".", vbYesNo, "Reminder") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report10.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report10.Enabled = False
+    Worksheets("Report-Builder").Report10.Locked = True
+    Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+    'Below is to use ACCESS to import source data and do the query
+         
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim wsDetails As Worksheet
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+        
+    Dim FSO As New FileSystemObject
+    Dim FileName1 As String
+    Dim filename2 As String
+    Dim filename3 As String
+    
+    Dim i As Integer
+    
+    'open appAccess to prepare for data loading in
+    Dim appAccess As Object
+    'create new access object
+    Set appAccess = CreateObject("Access.Application")
+    'open the acces project
+    Call appAccess.OpenCurrentDatabase(GetAddress(0))
+       
+    'delete/clean before process
+    filename3 = AccessDBFilePath & "\" & "Backup of Orders_OrderDetails_Import.xlk"
+        If FSO.FileExists(filename3) Then
+            FSO.DeleteFile filename3
+        End If
+            
+    'first to import customers
+    DisplayInfo "Report10.Loading Customers" & ", " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    FileName1 = DBFilePath & "\" & "Customers.xlsx" 'from Customers.xlsx to Customers.table, saved as Import-Customers
+    filename2 = AccessDBFilePath & "\Customers.xlsx"
+    If FSO.FileExists(filename2) Then
+        FSO.DeleteFile filename2
+    End If
+    FSO.CopyFile Source:=FileName1, Destination:=filename2
+    
+    appAccess.DoCmd.RunSQL "delete from Customers"
+    'import from Customers.xlsx
+    'to the table of Customers
+    'saved as "Import_Customers_Import"
+    appAccess.DoCmd.RunSavedImportExport "Import_Customers_Import"
+
+    Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+    For YearNumber = 2001 To 2021
+    'YearNumber = 2001
+        If YearNumber = 2021 Then
+            Special2021 = 4
+        Else
+            Special2021 = SplitTotal
+        End If
+                
+            '-------------------------------------------------------------------
+            For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+            
+                DisplayInfo "Report10.Loading Orders and OrderDetails in Year " & YearNumber & "_" & SplitNumber & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                 
+                '2nd to import orders with only two columns useful and orderdetails
+                FileName1 = AccessDBFilePath & "\" & "Orders_OrderDetails_Import.xlsx"
+                If FSO.FileExists(FileName1) Then
+                    FSO.DeleteFile FileName1
+                End If
+                
+                filename2 = GetAddress(YearNumber)
+                 '"C:\...\orders_2001_1.xlsx"
+ 
+                FSO.CopyFile Source:=filename2, Destination:=FileName1
+                
+                Set wb = xlApp.Workbooks.Open(FileName1) 'here time is consuming 2seconds
+                Set ws = wb.Sheets("Orders_" & YearNumber & "_" & SplitNumber)
+                ws.Name = "Orders"
+                NumberOfRows = ws.UsedRange.Rows.Count
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                
+                Set wsDetails = wb.Sheets("order_details_" & YearNumber & "_" & SplitNumber)
+                wsDetails.Name = "OrderDetails"
+                NumberOfRows = wsDetails.UsedRange.Rows.Count
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber, "OrderDetails")
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                
+                wb.Save
+                wb.Close 'close
+                Set wb = Nothing
+              
+                appAccess.DoCmd.RunSQL "delete from Orders"
+                appAccess.DoCmd.RunSavedImportExport "Import_Orders_Import"
+                
+                appAccess.DoCmd.RunSQL "delete from OrderDetails"
+                appAccess.DoCmd.RunSavedImportExport "Import_OrderDetails_Import"
+                                
+                'do the math
+                If YearNumber = 2001 And SplitNumber = 1 Then
+                    appAccess.DoCmd.RunSQL "delete from Media"
+                    appAccess.DoCmd.RunSQL "delete from Report10"
+                    DisplayInfo "Report10-Calculating in Year 2001 " & ", " _
+                                & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                Else
+                    DisplayInfo "Report10-Calculating in Year " & YearNumber & ", " _
+                                & vbNewLine & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+                End If
+                
+                Dim sql As String
+                sql = "Insert into Media " _
+                            & " SELECT c.CustomerID, CompanyName, Country, City, SpendAmount" _
+                            & " FROM (" _
+                            & " SELECT customerID," _
+                            & " SUM(IIF(isnull(Unitprice*quantity*(1-discount)),0,(Unitprice*quantity*(1-discount)))) AS SpendAmount" _
+                            & " FROM Orders AS o INNER JOIN OrderDetails AS od" _
+                            & " ON o.OrderID=od.OrderID" _
+                            & " GROUP BY CustomerID )AS t" _
+                            & " INNER JOIN Customers AS c" _
+                            & " ON t.CustomerID=c.CustomerID"
+                            
+                'the table Media is the media table for all customers' spendAmount
+                appAccess.DoCmd.RunSQL sql
+                
+
+        Next SplitNumber
+    Next YearNumber
+    
+    DisplayInfo "Report10-Almost Done" & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    'select the top 500
+    sql = "Insert into Report10 " _
+    & " SELECT Top 500 CustomerID, CompanyName, Country, City, sum(SpendAmount) as TotalSpendAmount" _
+    & " FROM Media" _
+    & " Group by CustomerID, CompanyName, Country, City" _
+    & " Order by sum(SpendAmount) Desc"
+    appAccess.DoCmd.RunSQL sql
+        
+    ' Export Report10
+    'create Report within access folder
+    
+    FileName1 = AccessDBFilePath & "\" & "Report10.xlsx"
+    If FSO.FileExists(FileName1) Then
+        FSO.DeleteFile FileName1
+    End If
+    'export package
+    appAccess.DoCmd.RunSavedImportExport "Export_Report10_Export"
+    
+    'clean
+    appAccess.DoCmd.RunSQL "Delete from Customers"
+    appAccess.DoCmd.RunSQL "Delete from Orders"
+    appAccess.DoCmd.RunSQL "Delete from OrderDetails"
+    appAccess.DoCmd.RunSQL "Delete from Report10"
+    'Close access
+    appAccess.DoCmd.Quit
+    Set appAccess = Nothing
+    
+    '-------------------------------------------
+    'formatting report10
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+    Set wb = xlApp.Workbooks.Open(FileName1)
+ xlApp.DisplayAlerts = False
+    
+    'insert blank boarders
+    wb.Sheets("Report10").Rows("1:1").Select
+    wb.Sheets("Report10").Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+    wb.Sheets("Report10").Rows("1:1").Insert shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+    wb.Sheets("Report10").Columns("A:A").Select
+    wb.Sheets("Report10").Columns("A:A").Insert shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+    
+    'format the first heading
+    With wb.Sheets("Report10").Range("B2:F2")
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlBottom
+        .WrapText = False
+        .Orientation = 0
+        .AddIndent = False
+        .IndentLevel = 0
+        .ShrinkToFit = False
+        .ReadingOrder = xlContext
+        .MergeCells = False
+    End With
+    wb.Sheets("Report10").Range("B2").FormulaR1C1 = "Top 500 Customers"
+    wb.Sheets("Report10").Range("B2:F2").Merge
+
+    With wb.Sheets("Report10").Range("B4:F503").Font
+        '.Name = "Calibri"
+        .Size = 10
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ColorIndex = xlAutomatic
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontMinor
+    End With
+    
+
+    With wb.Sheets("Report10").Range("B2:F2").Font
+        .Name = "Calibri"
+        .Size = 16
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ColorIndex = xlAutomatic
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontMinor
+    End With
+    
+    'format the second heading
+    With wb.Sheets("Report10").Range("B3:F3").Font
+        .Name = "Calibri"
+        .Size = 12
+        .Strikethrough = False
+        .Superscript = False
+        .Subscript = False
+        .OutlineFont = False
+        .Shadow = False
+        .Underline = xlUnderlineStyleNone
+        .ColorIndex = xlAutomatic
+        .TintAndShade = 0
+        .ThemeFont = xlThemeFontMinor
+    End With
+    wb.Sheets("Report10").Range("B3:F3").Font.Bold = True
+    
+    'With xlApp.Selection.Interior
+    With wb.Sheets("Report10").Range("B2:F2").Interior
+        .Pattern = xlSolid
+        .PatternColorIndex = xlAutomatic
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = 0.399975585192419
+        .PatternTintAndShade = 0
+    End With
+    
+    wb.Sheets("Report10").Range("B3:F3").Select
+    With xlApp.Selection.Interior
+        .Pattern = xlSolid
+        .PatternColorIndex = xlAutomatic
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = 0.599993896298105
+        .PatternTintAndShade = 0
+    End With
+    
+    'add zebra
+    wb.Sheets("Report10").Range("B4:F503").FormatConditions.Add Type:=xlExpression, Formula1:= _
+        "=MOD(ROW(),2)"
+    wb.Sheets("Report10").Range("B4:F503").FormatConditions(wb.Sheets("Report10").Range("B4:F503").FormatConditions.Count).SetFirstPriority
+    With wb.Sheets("Report10").Range("B4:F503").FormatConditions(1).Interior
+        .PatternColorIndex = xlAutomatic
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = 0.799981688894314
+    End With
+    wb.Sheets("Report10").Range("B4:F503").FormatConditions(1).StopIfTrue = False
+    
+    'add $ sign before the Currency
+    wb.Sheets("Report10").Range("F4:F503").NumberFormat = "$#,##0.00"
+    
+    'change the tab color
+    With wb.Sheets("Report10").Tab
+        .ThemeColor = xlThemeColorAccent5
+        .TintAndShade = -0.249977111117893
+    End With
+    
+    'kill all gridlines
+    wb.Sheets("Report10").Cells.Select 'select the whole page
+    wb.Sheets("Report10").Range("A458").Activate
+    xlApp.ActiveWindow.DisplayGridlines = False
+    
+    'all coloumns autofit
+    wb.Sheets("Report10").Columns("A:F").EntireColumn.AutoFit
+    
+    'freeze the headers
+    wb.Sheets("Report10").Range("C4").Select
+    xlApp.ActiveWindow.FreezePanes = True
+          
+    Set ws = wb.Sheets("Report10")
+    ws.Name = "Yr 2001-2021"
+    xlApp.DisplayAlerts = True
+    '------------------------------------------------
+    
+    'create a folder for Report10
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report10 Top 500 example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report10 Top 500 example")
+    End If
+    
+    wb.SaveAs ThisWorkbook.Path & "\Report10 Top 500 example\" & _
+                "Report 10. Top 500 Customers from_2001_to_2021" & "_" & _
+                Format(Now, "YYYYMMDDHHMMSS") & ".xlsx"
+
+    xlApp.Quit
+    Set xlApp = Nothing
+
+    ' clean-up
+    
+    FileName1 = AccessDBFilePath & "\"
+
+    If FSO.FileExists(FileName1 & "Cutomers.xlsx") Then
+        FSO.DeleteFile FileName1 & "Cusomers.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Cusomers.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Cusomers.xlk"
+    End If
+    If FSO.FileExists(FileName1 & "Orders.xlsx") Then
+        FSO.DeleteFile FileName1 & "Orders.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Orders.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Orders.xlk"
+    End If
+    If FSO.FileExists(FileName1 & "Report10.xlsx") Then
+        FSO.DeleteFile FileName1 & "Report10.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Report10.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Report10.xlk"
+    End If
+    '-----------------------------------------------
+    
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 10 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and Top 500 Customers Report from_2001_to_2021 " _
+        & " generated.", vbInformation
+
+    Write_log 1, "Top 500 Customers from_2001_to_2021 ", MinutesElapsed
+        
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+
+    End If
+    
+    'note 2 to turn off screen updates
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+Exit Sub
+Dingdong:
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 8 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    xlApp.Quit
+    appAccess.DoCmd.Quit
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "Top 500 Customers-Report from_2001_to_2021", "Auditor Canceled "
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "Top 500 Customers-Report from_2001_to_2021", Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report10.Caption = "Report 10-Top 500 Customers"
+    Worksheets("Report-Builder").Report10.Enabled = True
+    Worksheets("Report-Builder").Report10.Locked = False
+    Application.DisplayAlerts = True
+End Sub
+
+Sub Report_9_PivotChartSelectedYears(ByVal countyear As Byte, ByVal YearNumbers As String)
+
+'PIVOT CHART EMBEDED IN EXCEL DATABESE
+
+'On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+Application.DisplayAlerts = False
+
+    Dim YearsStringLength As Byte
+    YearsStringLength = Len(YearNumbers)
+
+    If MsgBox("Are you sure to generate the report of ""ShipCountry-Orders in PivotChart ""in Year " & _
+        Left(YearNumbers, YearsStringLength - 1) & "?" & _
+        "  The whole process takes about " & Format((4 * countyear) / 86400, "hh:mm:ss") & " minute(s).", _
+        vbYesNo, "ShipCountry-Orders in PivotChart") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report9.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report9.Enabled = False
+    Worksheets("Report-Builder").Report9.Locked = True
+    'Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    'DisplaycurrentTime is working
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+    '-----------------------------------------------
+   
+    'to decide which stage it is
+    'Stage=1 means the Error Dingdong can just delete report8.xlsx
+    'stage=2 means the background xlapp will be running still, needs
+    'to find a way to close it
+    
+    'Below is to add codes of ShipCountry-Orders Report to prepare the data source for pivot table
+    Dim FSO As New FileSystemObject
+    Dim FileName1 As String
+    Dim filename2 As String
+    
+    'open appAccess to prepare for data loading in
+    Dim appAccess As Object
+    'create new access object
+    Set appAccess = CreateObject("Access.Application")
+    'open the acces project
+    Call appAccess.OpenCurrentDatabase(GetAddress(0))
+    
+    Dim Special2021 As Byte 'as Year 2021 only has 4 split parts
+    Dim countComma As Byte ' to count how many commas in the string of 'YearNumbers'
+    'YearNumbers takes the format of '2016,2019,2021,'
+    Dim m As Byte 'moving through the YearNumbers to find the sub year string
+    Dim Position As Byte 'mark the starting place for the next search
+    For m = 1 To YearsStringLength
+        If InStr(m, YearNumbers, ",") <> 0 Then
+            Position = InStr(m, YearNumbers, ",")
+            m = Position
+            countComma = countComma + 1
+            YearNumber = CInt(Mid(YearNumbers, m - 4, 4))
+            If YearNumber = 2021 Then
+                Special2021 = 4
+            Else
+                Special2021 = SplitTotal
+            End If
+            '-------------------------------------------------------------------
+            For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+            DisplayInfo "Report9." & GetFileName(YearNumber, SplitNumber) & ", " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+            '--------------------------------------------------------------------
+                filename2 = GetAddress(YearNumber)
+                
+                DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+                DisplayInfo DisplayFileInfo, "Left" 'Align Left
+                
+                appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+
+                appAccess.DoCmd.TransferSpreadsheet acImport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Orders_ShipCountry", _
+                        filename2, _
+                        True, _
+                        "orders_" & YearNumber & "_" & SplitNumber & "$"
+                        
+                If countComma = 1 And SplitNumber = 1 Then
+                    appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+                End If
+                
+                appAccess.DoCmd.RunSQL "Insert into ShipCountry_temp select OrderID, OrderDate, ShipCountry from Orders_ShipCountry"
+Stage = 1
+                'On Error Resume Next
+                'appAccess.DoCmd.RunSQL "Drop Table [orders_" & YearNumber & "_" & SplitNumber & "$_ImportErrors]"
+                'On Error GoTo Dingdong
+            
+            '-----------------------------
+            Next SplitNumber
+        End If
+    Next m ' all Selected years data is inserted into ShipCountry_temp table now
+    
+    'do the math
+    DisplayInfo "Report9-Calculating" & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+
+    appAccess.DoCmd.RunSQL "delete from Report8"
+    'needs to quote below query
+    appAccess.DoCmd.RunSQL "insert into Report8 " & _
+                    "(ShipCountry, [Year], [Orders]) " & _
+                    "select ShipCountry, YEAR(OrderDate) AS [Year]," & _
+                    "COUNT(OrderID) as [Orders]" & _
+                    "FROM ShipCountry_temp " & _
+                    "GROUP BY ShipCountry, YEAR(OrderDate) ORDER BY ShipCountry"
+                    
+    DisplayInfo "Report9-Almost Done" & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    'export to excel
+    'create a folder for Report8
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report9 PvtChart example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report9 PvtChart example")
+    End If
+    TimeStamp = Format(Now, "YYYYMMDDHHMMSS")
+    FileName1 = ThisWorkbook.Path & "\Report9 PvtChart example\" & "Report 9.ShipCountry-Orders-in-Pivot-Chart in Year " _
+        & Left(YearNumbers, YearsStringLength - 1) & "_" _
+        & TimeStamp & ".xlsx"
+    
+Stage = 2
+
+    appAccess.DoCmd.TransferSpreadsheet acExport, _
+                        acSpreadsheetTypeExcel12Xml, _
+                        "Report8", _
+                        FileName1, _
+                        True
+    'report8 is the table name, be aware
+    ' clean-up
+    appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+    appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+    appAccess.DoCmd.RunSQL "delete from Report8"
+    
+    'close app
+    appAccess.DoCmd.Quit
+    Set appAccess = Nothing
+    
+    '-----------------------------------------------
+    '-----------------------------------------------
+    'below is for pivot table , i create pvt chart based on pivot table rather than source data
+    
+    Dim PSheet As Worksheet
+    Dim DSheet As Worksheet
+    Dim PCache As PivotCache
+    Dim PTable As PivotTable
+    Dim PRange As Range
+    Dim LastRow As Long
+    Dim LastCol As Long
+    
+    'open Report8.xlsx
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+    'open Report8.xlsx
+    
+    Set wb = xlApp.Workbooks.Open(FileName1)
+    Set ws = wb.Sheets(1)
+    ws.Name = "DataSource"
+    
+    xlApp.DisplayAlerts = False
+    wb.Worksheets.Add.Name = "PivotTable"
+    'Sheets.Add Before:=ActiveSheet
+    xlApp.DisplayAlerts = True
+    
+    wb.Save
+    
+    DisplayInfo "Generating, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    Set PSheet = wb.Sheets("PivotTable")
+    Set DSheet = wb.Sheets("DataSource")
+
+    'Define Data Range of Report8
+    LastRow = DSheet.Cells(Rows.Count, 1).End(xlUp).Row
+    LastCol = DSheet.Cells(1, Columns.Count).End(xlToLeft).Column
+    Set PRange = DSheet.Cells(1, 1).Resize(LastRow, LastCol)
+
+    wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=PRange, Version:=xlPivotTableVersion12).CreatePivotTable TableDestination:=PSheet.Range("A1"), TableName:="SumofOrders", DefaultVersion:=xlPivotTableVersion12
+
+    Set PTable = PSheet.PivotTables("SumofOrders")
+    
+    PTable.ManualUpdate = True
+    
+    'Insert Row Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("ShipCountry")
+    .Orientation = xlRowField
+    .Position = 1
+    End With
+    
+    'Insert Column Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("Year")
+    .Orientation = xlColumnField
+    .Position = 1
+    End With
+    
+    'Insert Data Field
+    With PSheet.PivotTables("SumofOrders").PivotFields("Orders")
+    .Orientation = xlDataField
+    .Position = 1
+    .Function = xlSum
+    .NumberFormat = "#,##0"
+    .Name = "Sum of Orders"
+    
+    End With
+    
+    PTable.ManualUpdate = False
+    'Format Pivot
+    PSheet.PivotTables("SumofOrders").ShowTableStyleRowStripes = True
+    PSheet.PivotTables("SumofOrders").TableStyle2 = "PivotStyleMedium9"
+    PSheet.PivotTables("SumofOrders").NullString = "0" 'to replace empty cells with ZERO!
+    
+    '--------------------------------------------------------------------------------
+    
+    'below is for pvt chart
+    Dim ChartRange As Range
+    Dim sh As Shape
+    Dim ch As Chart
+    Set ChartRange = PTable.TableRange1
+    Set sh = PSheet.Shapes.AddChart(XlChartType:=XlChartType.xlColumnClustered, Width:=1200, Height:=600)
+    Set ch = sh.Chart
+    ch.SetSourceData ChartRange
+   
+    sh.Top = PTable.TableRange1.Top + PTable.TableRange1.Height + 10
+    sh.Left = PTable.TableRange1.Left
+    
+    ch.ChartStyle = 42
+    ch.ApplyLayout 1
+    ch.HasTitle = True
+    
+    Dim titletext As String
+    titletext = PTable.DataFields(1).Caption & " by " & PTable.RowFields(1).Name & " and " & PTable.ColumnFields(1).Name
+    ch.ChartTitle.Text = titletext
+      
+    wb.Save
+
+    ch.Export ThisWorkbook.Path & "\Report9 PvtChart example\" & "Report 9.ShipCountry-Orders-in-PivotChart in Year " & Left(YearNumbers, YearsStringLength - 1) & "_" _
+        & Format(Now, "YYYYMMDDHHMMSS") & ".png"
+Stage = 3
+    wb.Close
+    xlApp.Quit
+    
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 9 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & _
+            " minutes and ShipCountry-Orders PivotChart Report in Year " & Left(YearNumbers, YearsStringLength - 1) & _
+            " has been generated.", vbInformation, "ShipCountry-Orders in PivotChart"
+
+    Write_log 1, "ShipCountry-Orders-in-PivotChart in Year " & Left(YearNumbers, YearsStringLength - 1), MinutesElapsed
+
+    Worksheets("Report-Builder").Report9.Caption = "Report 9-ShipCountry-Orders in PivotChart"
+    Worksheets("Report-Builder").Report9.Enabled = True
+    Worksheets("Report-Builder").Report9.Locked = False
+    End If
+    
+Application.DisplayAlerts = True
+Exit Sub
+Dingdong:
+    Application.DisplayAlerts = False
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 9 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    On Error Resume Next
+    If Stage = 2 Then
+    
+        wb.Save
+        wb.Close
+        xlApp.Quit
+        FSO.DeleteFile FileName1
+    ElseIf Stage = 1 Then
+        appAccess.DoCmd.RunSQL "Drop Table [orders_" & YearNumber & "_" & SplitNumber & "$_ImportErrors]"
+    End If
+    
+    On Error GoTo Dingdong2
+    
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotChart in Year " & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotChart in Year " & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+    
+    Worksheets("Report-Builder").Report9.Caption = "Report 9-ShipCountry-Orders in PivotChart"
+    Worksheets("Report-Builder").Report9.Enabled = True
+    Worksheets("Report-Builder").Report9.Locked = False
+    Application.DisplayAlerts = True
+
+Exit Sub
+Dingdong2:
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotChart in Year " & Left(YearNumbers, YearsStringLength - 1), "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotChart in Year " & Left(YearNumbers, YearsStringLength - 1), Err.Source & Err.Description
+    End If
+    
+    xlApp.Quit ' to close the app here
+    
+    Worksheets("Report-Builder").Report9.Caption = "Report 9-ShipCountry-Orders in PivotChart"
+    Worksheets("Report-Builder").Report9.Enabled = True
+    Worksheets("Report-Builder").Report9.Locked = False
+    Application.DisplayAlerts = True
+
+
+End Sub
+Sub Report_9_PivotChart()
+
+'PIVOT CHART EMBEDED IN EXCEL DATABESE
+
+On Error GoTo Dingdong
+Application.EnableCancelKey = xlErrorHandler
+
+    If MsgBox("Are you sure to generate the report of ""ShipCountry-Orders in PivotChart in 21 Years? " & _
+          "  The whole process takes about 7 minutes. If you wish to see the report of Selected Year(s), " & _
+          "Please go to button ""Run Reports"".", vbYesNo, "ShipCountry-Orders in PivotChart") = vbYes Then
+    MsgBox "Report Generating. Please wait.", vbInformation
+    Worksheets("Report-Builder").Report9.Caption = "Report Generating. Please WAIT."
+    Worksheets("Report-Builder").Report9.Enabled = False
+    Worksheets("Report-Builder").Report9.Locked = True
+    Application.Wait (Now + TimeValue("0:00:03"))
+    
+    HasStarted = True
+    
+    '1st to add timer
+    Dim StartTime As Double
+    Dim MinutesElapsed As String
+    'Remember time when macro starts
+    StartTime = Timer
+    ThisWorkbook.Sheets("Report-Builder").lblStart.Caption = Now()
+    DisplayCurrentTime
+    DisplayInfo "Preparing, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    
+    '-----------------------------------------------
+    'Below is to add codes of ShipCountry-Orders Report to prepare the data source for pivot table
+      
+    Dim xlApp As Excel.Application
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim wsOrderOriginal As Worksheet
+ 
+    Set xlApp = New Excel.Application
+    xlApp.Visible = False
+    
+    Dim FSO As New FileSystemObject
+    Dim FileName1 As String
+    Dim filename2 As String
+    Dim filename3 As String
+    
+    'open appAccess to prepare for data loading in
+    Dim appAccess As Object
+    'create new access object
+    Set appAccess = CreateObject("Access.Application")
+    'open the acces project
+    Call appAccess.OpenCurrentDatabase(GetAddress(0))
+    
+    'clean up before process
+    FileName1 = AccessDBFilePath & "\" & "Backup of Orders_ShipCountry_Import.xlk"
+    If FSO.FileExists(FileName1) Then
+        FSO.DeleteFile FileName1
+    End If
+
+    Dim Special2021 As Byte 'Year 2021 only has 4 split parts
+    For YearNumber = 2001 To 2021
+    
+        If YearNumber = 2021 Then
+            Special2021 = 4
+        Else
+            Special2021 = SplitTotal
+        End If
+        '-------------------------------------------------------------------
+        For SplitNumber = 1 To Special2021 'if each year data is split, then get split data for each year
+        
+             DisplayInfo "Report9." & GetFileName(YearNumber, SplitNumber) & ", " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+             
+             filename3 = AccessDBFilePath & "\" & "Orders_ShipCountry_Import.xlsx"
+             If FSO.FileExists(filename3) Then
+                 FSO.DeleteFile filename3
+             End If
+             
+             filename2 = GetAddress(YearNumber)
+             ' copy yearly split data to Orders_ShipCountry_Import.xlsx
+             FSO.CopyFile Source:=filename2, Destination:=filename3
+             
+             ' rename sheet to Orders,no need to change the name but in case the yearly data are different among each other
+             Set wb = xlApp.Workbooks.Open(filename3)
+             Set ws = wb.Sheets("Orders_" & YearNumber & "_" & SplitNumber)
+             ws.Name = "Orders"
+             NumberOfRows = ws.UsedRange.Rows.Count
+             DisplayFileInfo = GetFileInformation(YearNumber, SplitNumber)
+             DisplayInfo DisplayFileInfo, "Left" 'Align Left
+             wb.Save
+             wb.Close
+             Set wb = Nothing
+             
+             'after the partial data be copied within the same folder
+             'ready to load data from Excel to Access
+             'SavedImportProcess is
+             'Load from 'Orders_ShipCountry_Import.xlsx'
+             'to table of 'Orders_ShipCountry'
+             'saved as 'Import_Orders_ShipCountry_Import'
+             
+             appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+             appAccess.DoCmd.RunSavedImportExport "Import_Orders_ShipCountry_Import"
+             'notes: make table of Orders_ShipCountry ready for import by setting up the index
+             
+            'in order to collect data of 21 years, instead of over-write by using the same table name_Orders_ShipCountry
+             'to create an assisting table od_temp
+             If YearNumber = 2001 And SplitNumber = 1 Then
+                 appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+             End If
+             appAccess.DoCmd.RunSQL "Insert into ShipCountry_temp select OrderID, OrderDate, ShipCountry from Orders_ShipCountry"
+
+        '-----------------------------
+        Next SplitNumber
+                
+    Next YearNumber ' all 21-year-data is inserted into ShipCountry_temp table now
+    
+    'do the math
+    DisplayInfo "Report9-Calculating" & "," & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    'export package
+    'from Table of "Report8"
+    'to "Report8.xlsx" in AccessDBFilePath
+    'and saved the procecure as "Export_Report8_Export"
+    'appAccess.DoCmd.RunSavedImportExport "Export_Report8_Export"
+    appAccess.DoCmd.RunSQL "delete from Report8"
+    'needs to quote below query
+    appAccess.DoCmd.RunSQL "insert into Report8 " & _
+                    "(ShipCountry, [Year], [Orders]) " & _
+                    "select ShipCountry, YEAR(OrderDate) AS [Year]," & _
+                    "COUNT(OrderID) as [Orders]" & _
+                    "FROM ShipCountry_temp " & _
+                    "GROUP BY ShipCountry, YEAR(OrderDate) ORDER BY ShipCountry"
+                    
+    DisplayInfo "Report9-Almost Done" & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    FileName1 = AccessDBFilePath & "\" & "Report8.xlsx"
+    If FSO.FileExists(FileName1) Then
+        FSO.DeleteFile FileName1
+    End If
+    'export package
+    appAccess.DoCmd.RunSavedImportExport "Export_Report8_Export"
+     
+    ' clean-up
+    appAccess.DoCmd.RunSQL "delete from ShipCountry_temp"
+    appAccess.DoCmd.RunSQL "delete from Orders_ShipCountry"
+    
+    FileName1 = AccessDBFilePath & "\"
+
+    If FSO.FileExists(FileName1 & "Orders_ShipCountry_Import.xlsx") Then
+        FSO.DeleteFile FileName1 & "Orders_ShipCountry_Import.xlsx"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Orders_ShipCountry_Import.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Orders_ShipCountry_Import.xlk"
+    End If
+    
+    'close app
+    appAccess.DoCmd.Quit
+    Set appAccess = Nothing
+    
+    '-----------------------------------------------
+    'below is for pivot table , i create pvt chart based on pivot table rather than source data
+    
+    Dim PSheet As Worksheet
+    Dim DSheet As Worksheet
+    Dim PCache As PivotCache
+    Dim PTable As PivotTable
+    Dim PRange As Range
+    Dim LastRow As Long
+    Dim LastCol As Long
+    
+    'open Report8.xlsx
+    filename2 = AccessDBFilePath & "\" & "Report8.xlsx"
+    Set wb = xlApp.Workbooks.Open(filename2)
+    Set ws = wb.Sheets(1)
+    ws.Name = "DataSource"
+    
+    xlApp.DisplayAlerts = False
+    wb.Worksheets.Add.Name = "PivotTable"
+    'Sheets.Add Before:=ActiveSheet
+    xlApp.DisplayAlerts = True
+    
+    wb.Save
+    
+    DisplayInfo "Generating, " & Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    Set PSheet = wb.Sheets("PivotTable")
+    Set DSheet = wb.Sheets("DataSource")
+
+    'Define Data Range of Report8
+    LastRow = DSheet.Cells(Rows.Count, 1).End(xlUp).Row
+    LastCol = DSheet.Cells(1, Columns.Count).End(xlToLeft).Column
+    Set PRange = DSheet.Cells(1, 1).Resize(LastRow, LastCol)
+
+    wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=PRange, Version:=xlPivotTableVersion12).CreatePivotTable TableDestination:=PSheet.Range("A1"), TableName:="SumofOrders", DefaultVersion:=xlPivotTableVersion12
+
+    Set PTable = PSheet.PivotTables("SumofOrders")
+    
+    PTable.ManualUpdate = True
+    
+    'Insert Row Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("ShipCountry")
+    .Orientation = xlRowField
+    .Position = 1
+    End With
+    
+    'Insert Column Fields
+    With PSheet.PivotTables("SumofOrders").PivotFields("Year")
+    .Orientation = xlColumnField
+    .Position = 1
+    End With
+    
+    'Insert Data Field
+    With PSheet.PivotTables("SumofOrders").PivotFields("Orders")
+    .Orientation = xlDataField
+    .Position = 1
+    .Function = xlSum
+    .NumberFormat = "#,##0"
+    .Name = "Sum of Orders"
+    End With
+    
+    PTable.ManualUpdate = False
+    'Format Pivot
+    PSheet.PivotTables("SumofOrders").ShowTableStyleRowStripes = True
+    PSheet.PivotTables("SumofOrders").TableStyle2 = "PivotStyleMedium9"
+    PSheet.PivotTables("SumofOrders").NullString = "0" 'to replace empty cells with ZERO!
+    
+    '--------------------------------------------------------------------------------
+    
+    'below is for pvt chart
+    Dim ChartRange As Range
+    Dim sh As Shape
+    Dim ch As Chart
+    Set ChartRange = PTable.TableRange1
+    Set sh = PSheet.Shapes.AddChart(XlChartType:=XlChartType.xlColumnClustered, Width:=1200, Height:=600)
+    Set ch = sh.Chart
+    ch.SetSourceData ChartRange
+   
+    sh.Top = PTable.TableRange1.Top + PTable.TableRange1.Height + 10
+    sh.Left = PTable.TableRange1.Left
+    
+    ch.ChartStyle = 42
+    ch.ApplyLayout 1
+    ch.HasTitle = True
+    
+    Dim titletext As String
+    titletext = PTable.DataFields(1).Caption & " by " & PTable.RowFields(1).Name & " and " & PTable.ColumnFields(1).Name
+    ch.ChartTitle.Text = titletext
+      
+    'create a folder for Report9
+    If FSO.FolderExists(ThisWorkbook.Path & "\Report9 PvtChart example") = False Then
+        FSO.CreateFolder (ThisWorkbook.Path & "\Report9 PvtChart example")
+    End If
+        wb.SaveAs ThisWorkbook.Path & "\Report9 PvtChart example\" & "Report 9.ShipCountry-Orders-in-PivotChart from_2001_to_2021_" _
+        & Format(Now, "YYYYMMDDHHMMSS") & ".xlsx"
+                
+    ch.Export ThisWorkbook.Path & "\Report9 PvtChart example\" & "Report 9.ShipCountry-Orders-in-PivotChart from_2001_to_2021_" _
+        & Format(Now, "YYYYMMDDHHMMSS") & ".png"
+    wb.Close
+    xlApp.Quit
+    
+    FileName1 = AccessDBFilePath & "\"
+  
+    If FSO.FileExists(FileName1 & "Backup of Report 9.ShipCountry-Orders-in-PivotChart.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Report 9.ShipCountry-Orders-in-PivotChart.xlk"
+    End If
+    If FSO.FileExists(FileName1 & "Backup of Report8.xlk") Then
+        FSO.DeleteFile FileName1 & "Backup of Report8.xlk"
+    End If
+    If FSO.FileExists(FileName1 & "Report8.xlsx") Then
+        FSO.DeleteFile FileName1 & "Report8.xlsx"
+    End If
+    
+    'Determine how many seconds code took to run
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 9 - Completed" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    
+    'Notify user in seconds
+    MsgBox "This code ran successfully in " & MinutesElapsed & " minutes and ShipCountry-Orders in PivotChart Report generated.", vbInformation
+
+    Write_log 1, "ShipCountry-Orders-in-PivotChart from 2001 to 2021", MinutesElapsed
+
+    Worksheets("Report-Builder").Report9.Caption = "Report 9-ShipCountry-Orders in PivotChart"
+    Worksheets("Report-Builder").Report9.Enabled = True
+    Worksheets("Report-Builder").Report9.Locked = False
+    End If
+
+Exit Sub
+Dingdong:
+
+    MinutesElapsed = Format((Timer - StartTime) / 86400, "hh:mm:ss")
+    DisplayInfo "Report 9 - Canceled" & ", " & MinutesElapsed
+    HasStarted = False
+    ThisWorkbook.Sheets("Report-Builder").lblEnd.Caption = Now()
+    xlApp.Quit
+    If Err = 18 Or Err = 3059 Then
+        MsgBox "Report Canceled."
+        Write_log 0, "ShipCountry-Orders-in-PivotChart-Report from 2001 to 2021", "Auditor Canceled"
+        Worksheets("Report-Builder").btnCancelGeneration.Enabled = True
+        Worksheets("Report-Builder").btnCancelGeneration.Locked = False
+    Else
+        MsgBox "There seems to be an error. Please try again." & vbCrLf & Err.Source & Err.Description
+        Write_log 0, "ShipCountry-Orders-in-PivotChart-Report from 2001 to 2021", Err.Source & Err.Description
+    End If
+
+    Worksheets("Report-Builder").Report9.Caption = "Report 9-ShipCountry-Orders in PivotChart"
+    Worksheets("Report-Builder").Report9.Enabled = True
+    Worksheets("Report-Builder").Report9.Locked = False
+    '----------------------
+   
+
+End Sub
+Public Function Write_log(msg_type As Byte, msg As String, CodeRunningTime As String) As String
+Dim xlApp As Excel.Application
+Set xlApp = New Excel.Application
+xlApp.Visible = False
+
+Dim wblog As Workbook
+Dim wslog As Worksheet
+Dim FSO As FileSystemObject
+Dim FileName1 As String
+FileName1 = ThisWorkbook.Path & "\Log"
+Set FSO = New FileSystemObject
+If FSO.FolderExists(FileName1) = False Then
+    FSO.CreateFolder (FileName1)
+End If
+    FileName1 = ThisWorkbook.Path & "\Log\Log-example.xlsm"
+    If FSO.FileExists(FileName1) = False Then
+        
+        Set wblog = xlApp.Workbooks.Add
+        
+        Set wslog = wblog.Sheets(1)
+        wslog.Name = "Log"
+        wslog.Cells(1, 1) = "DateTime"
+        wslog.Cells(1, 2) = "Auditor"
+        wslog.Cells(1, 3) = "Computer"
+        wslog.Cells(1, 4) = "Note"
+        wslog.Cells(1, 5) = "Code Running Time or Error Message"
+        
+        xlApp.DisplayAlerts = False
+        wblog.SaveAs FileName1, xlOpenXMLWorkbookMacroEnabled
+        wblog.Close
+        xlApp.DisplayAlerts = True
+    Else
+        FileName1 = ThisWorkbook.Path & "\Log\Log-example.xlsm"
+    End If
+
+Set wblog = xlApp.Workbooks.Open(FileName1)
+Set wslog = wblog.Sheets("Log")
+
+Dim msg_str As String
+    If msg_type = 1 Then
+       msg_str = "[Report Generated]"
+    End If
+    If msg_type = -1 Then
+       msg_str = "[*****]"
+    End If
+    If msg_type = 0 Then
+        msg_str = "[ERROR]"
+    End If
+
+    msg_str = msg_str & " " & msg
+
+    Dim i As Long
+    i = xlApp.CountA(wslog.Range("A1:A1000000"))
+    
+    wslog.Cells(i + 1, 1) = gettime
+    wslog.Cells(i + 1, 2) = getuser
+    wslog.Cells(i + 1, 3) = getcomputer
+    wslog.Cells(i + 1, 4) = msg_str
+    wslog.Cells(i + 1, 5) = CodeRunningTime
+    wslog.Cells.EntireColumn.AutoFit
+    wblog.Save
+    
+    wblog.Close
+    xlApp.Quit
+    'DoCmd.SetWarnings False
+    MsgBox "Log has been written", vbOKOnly, "Log"
+    'DoCmd.SetWarnings True
+End Function
+
+Public Function gettime() As String
+    gettime = Format(Now, "YYYY-MM-DD HH:MM:SS")
+End Function
+Public Function getuser() As String
+    getuser = Environ("username")
+End Function
+Public Function getcomputer() As String
+    getcomputer = Environ("ComputerName")
+End Function
+Public Function getmsg_str() As String
+    getmsg_str = msg_str
+'replace the getnumber() expression in log with the actual number itself (TimeStamp's value)
+End Function
+
+Public Sub LinesOfCode()
+       Dim vbaModule As Object   ' The VBA module object
+        Dim lngNumMods As Long      ' The number of modules counted
+        Dim LinesOfCode As Long     ' Total lines
+        Dim lngDecLines As Long     ' Declarative lines
+        Dim lngProcLines As Long    ' Procedural lines
+         
+        ' Zero out the variables and the counter
+        lngDecLines = 0     ' Declarative lines (at the top of each module or form only)
+        lngProcLines = 0    ' Lines of code (Procedural), including the Dim statements
+        LinesOfCode = 0     ' Total of the Declarative and Procedural lines
+        lngNumMods = 0      ' Number of modules and forms checks, actually the number of loops
+         
+        ' Check each module in the active VBE project(VBComponents)
+        For Each vbaModule In Application.VBE.ActiveVBProject.VBComponents
+            With vbaModule
+                lngNumMods = lngNumMods + 1
+                lngDecLines = lngDecLines + .CodeModule.CountOfDeclarationLines
+                lngProcLines = lngProcLines + .CodeModule.CountOfLines
+                LinesOfCode = LinesOfCode + (.CodeModule.CountOfLines + .CodeModule.CountOfDeclarationLines)
+            End With
+        Next vbaModule
+ 
+        ' Send a message with the results
+        MsgBox "Total lines of code: " & LinesOfCode & vbCrLf & "Declarative lines: " & lngDecLines & vbCrLf & "Procedural lines: " & lngProcLines & vbCrLf & "Modules: " & lngNumMods
+ 
+End Sub

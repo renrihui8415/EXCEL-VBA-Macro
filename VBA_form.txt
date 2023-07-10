@@ -1,0 +1,144 @@
+Option Explicit
+Dim Total_Reports As Byte
+
+Private Sub btnClose_Click()
+    Unload Me
+End Sub
+Private Sub btnRun_Click()
+    Dim i As Integer
+    Dim YearNumbers As String
+    Total_Reports = Me.lstYears.ListCount - 1
+    Dim countyear As Byte
+    Dim Number As Byte 'select both year and report can get number= 2 or 3
+    Dim Number1 As Byte 'to tell from 21years report or selected years report
+'???????why below not working-----listindex.....
+'cause we need to prevent auto select for the 1st item in form_initialize
+    'to check the year listbox
+    countyear = 0
+    Number = 0
+    Number1 = 0
+    For i = 0 To Total_Reports
+        If Me.lstYears.Selected(i) Then
+            YearNumbers = YearNumbers & lstYears.List(i) & ","
+            countyear = countyear + 1
+        End If
+            
+    Next i
+    
+    If countyear > 0 And countyear < Total_Reports + 1 Then
+        Number = Number + 1
+    ElseIf countyear = Me.lstYears.ListCount Then
+        Number = Number + 1
+        Number1 = Number1 + 1
+        
+    End If
+    
+    'check the report cbo box
+    Total_Reports = cboReports.ListCount - 1
+    If Trim(cboReports.Value) <> "" Then
+        Number = Number + 1
+    End If
+    
+    'to determine which MACRO to call
+    If Number < 2 Then
+        MsgBox "Please choose from both years and reports.", vbOKOnly, "Reminder"
+        Exit Sub
+    ElseIf Number = 2 And Number1 = 0 Then
+        If cboReports.ListIndex = 0 Then
+            Unload Me
+            Call Report_8_PivotTableSelectedYearsADO(countyear, YearNumbers)
+        ElseIf cboReports.ListIndex = 1 Then
+            Unload Me
+            Call Report_9_PivotChartSelectedYears(countyear, YearNumbers)
+        ElseIf cboReports.ListIndex = 2 Then
+            Unload Me
+            Call Report_10_Top500CustomersSelectedYears(countyear, YearNumbers)
+        End If
+    ElseIf Number = 2 And Number1 = 1 Then
+        If cboReports.ListIndex = 0 Then
+            Unload Me
+            Call Report_8_PivotTable
+        ElseIf cboReports.ListIndex = 1 Then
+            Unload Me
+            Call Report_9_PivotChart
+        ElseIf cboReports.ListIndex = 2 Then
+            Unload Me
+            Call Report_10_Top500Customers
+        End If
+    End If
+    Unload Me
+
+End Sub
+Private Sub btnSelectAll_Click()
+    Dim i As Byte
+    Dim Total_Reports As Integer
+    Total_Reports = Me.lstYears.ListCount - 1
+    If btnSelectAll.Value = True Then
+    
+        For i = 0 To Total_Reports
+            If lstYears.Selected(i) = False Then
+                lstYears.Selected(i) = True
+            End If
+        Next i
+
+    End If
+    btnSelectAll.Value = False
+End Sub
+
+Private Sub btnUnselectAll_Click()
+    Dim i As Byte
+    Dim Total_Reports As Integer
+    Total_Reports = Me.lstYears.ListCount - 1
+    If btnUnselectAll.Value = True Then
+    
+        For i = 0 To Total_Reports
+            If lstYears.Selected(i) = True Then
+                lstYears.Selected(i) = False
+            End If
+        Next i
+
+    End If
+    btnUnselectAll.Value = False
+End Sub
+
+Private Sub lstYears_Click()
+
+End Sub
+
+Private Sub UserForm_Initialize()
+    Me.Caption = "Years Selection"
+    
+    Me.btnSelectAll.Caption = "Select All"
+    Me.btnUnselectAll.Caption = "Unselect All"
+
+    Me.cboReports.Clear
+    Me.cboReports.AddItem "ShipCountry-Orders in Pivot Table"
+    Me.cboReports.AddItem "ShipCountry-Orders in Pivot Chart"
+    Me.cboReports.AddItem "Top 500 Customers"
+    Me.lstYears.Clear
+    Me.lstYears.AddItem "2021"
+    Me.lstYears.AddItem "2020"
+    Me.lstYears.AddItem "2019"
+    Me.lstYears.AddItem "2018"
+    Me.lstYears.AddItem "2017"
+    Me.lstYears.AddItem "2016"
+    Me.lstYears.AddItem "2015"
+    Me.lstYears.AddItem "2014"
+    Me.lstYears.AddItem "2013"
+    Me.lstYears.AddItem "2012"
+    Me.lstYears.AddItem "2011"
+    Me.lstYears.AddItem "2010"
+    Me.lstYears.AddItem "2009"
+    Me.lstYears.AddItem "2008"
+    Me.lstYears.AddItem "2007"
+    Me.lstYears.AddItem "2006"
+    Me.lstYears.AddItem "2005"
+    Me.lstYears.AddItem "2004"
+    Me.lstYears.AddItem "2003"
+    Me.lstYears.AddItem "2002"
+    Me.lstYears.AddItem "2001"
+    
+    Me.lstYears.ListIndex = -1
+End Sub
+
+
