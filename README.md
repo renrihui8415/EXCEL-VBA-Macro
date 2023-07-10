@@ -11,7 +11,8 @@
 ** Integrating Excel Macro with Task Scheduler can achieve a fully automated reporting process.
 
 ## Requirements
-* Microsoft EXCEL
+* Microsoft Office or 365
+
 
 
 
