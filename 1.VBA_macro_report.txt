@@ -3178,13 +3178,9 @@ Stage = 1
                   
                     End If
                     'CommandStr = "dtexec /f """ & SSISFolder & "\ImportFromExcelOrders.dtsx"""
-                    CommandStr = "dtexec /f ""C:\Users\Administrator\Desktop\SSIS\ImportFromExcelOrders.dtsx"""
-                    'Call Shell(CommandStr, 0)
-                    
-                     'CommandStr = "C:\Program Files\Microsoft SQL Server\150\DTS\Binn\DTEXEC.exe /f ""C:\Users\Administrator\Desktop\ImportFromExcelOrders.dtsx"""
-
+                    CommandStr = "dtexec /f ""C:\Users\...\SSIS\ImportFromExcelOrders.dtsx"""
                     Call Shell(CommandStr, 0)
-                    CommandStr = "dtexec /f ""C:\Users\Administrator\Desktop\SSIS\ImportFromExcelOrderDetails.dtsx"""
+                    CommandStr = "dtexec /f ""C:\Users\...\SSIS\ImportFromExcelOrderDetails.dtsx"""
                     Call Shell(CommandStr, 0)
                     If FSO.FileExists(filename2) Then
                         FSO.DeleteFile (filename2)
